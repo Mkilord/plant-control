@@ -40,13 +40,9 @@ class PumpPassport:
                 f"nominal_flow_ml_s must be positive, got {self.nominal_flow_ml_s}"
             )
         if self.max_runtime <= timedelta(0):
-            raise InvalidPumpPassportError(
-                f"max_runtime must be positive, got {self.max_runtime}"
-            )
+            raise InvalidPumpPassportError(f"max_runtime must be positive, got {self.max_runtime}")
         if self.cooldown < timedelta(0):
-            raise InvalidPumpPassportError(
-                f"cooldown must be non-negative, got {self.cooldown}"
-            )
+            raise InvalidPumpPassportError(f"cooldown must be non-negative, got {self.cooldown}")
 
 
 # Сущность. Обычный класс, а не dataclass: у сущности есть идентичность (id),
@@ -87,34 +83,37 @@ class Pump:
     # --- Проверки ---
 
     def check_can_start(self, now: datetime, duration: timedelta) -> None:
-        """Бросает доменную ошибку, если насос нельзя включить на duration."""
-        # TODO: уже включён -> PumpAlreadyRunningError
-        # TODO: состояние неизвестно -> PumpStateUnknownError
-        # TODO: не прошло остывание с момента stopped_at -> PumpCoolingDownError
-        # TODO: duration больше max_runtime -> PumpRuntimeExceededError
-        raise NotImplementedError
+        if self._state is PumpState.ON:
+            raise PumpAlreadyRunningError("Pump is already running.")
+
+        if self._state is PumpState.UNKNOWN:
+            raise PumpStateUnknownError("Pump state is unknown.")
+
+        if self._stopped_at is not None:
+            elapsed = now - self._stopped_at
+            if elapsed < self._passport.cooldown:
+                raise PumpCoolingDownError("Pump is cooling down.")
+
+        if duration > self._passport.max_runtime:
+            raise PumpRuntimeExceededError("Pump runtime exceeded.")
 
     def is_overrun(self, now: datetime) -> bool:
-        """True, если насос включён дольше max_runtime."""
-        # TODO
-        raise NotImplementedError
+        if self._state is PumpState.ON and self._started_at is not None:
+            return now - self._started_at > self._passport.max_runtime
+        return False
 
     # --- Изменение состояния ---
 
     def mark_started(self, now: datetime) -> None:
-        """Реле подтвердило включение."""
-        # TODO
-        raise NotImplementedError
+        self._state = PumpState.ON
+        self._started_at = now
 
     def mark_stopped(self, now: datetime) -> None:
-        """Реле подтвердило выключение. Допустимо из любого состояния."""
-        # TODO
-        raise NotImplementedError
+        self._state = PumpState.OFF
+        self._stopped_at = now
 
     def mark_unknown(self) -> None:
-        """Команда ушла, результат неизвестен."""
-        # TODO
-        raise NotImplementedError
+        self._state = PumpState.UNKNOWN
 
     # --- Идентичность ---
 
