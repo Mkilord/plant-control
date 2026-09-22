@@ -3,12 +3,14 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from plant_control.domain.errors import (
+    InvalidFlowCurveError,
     InvalidPumpPassportError,
     PumpAlreadyRunningError,
     PumpCoolingDownError,
     PumpRuntimeExceededError,
     PumpStateUnknownError,
 )
+from plant_control.domain.flow import ConstantFlow
 from plant_control.domain.pump import Pump, PumpPassport, PumpState
 
 # Время всегда aware в UTC, чтобы не смешивать naive и aware.
@@ -19,16 +21,17 @@ T0 = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 @pytest.fixture
 def passport() -> PumpPassport:
     return PumpPassport(
-        nominal_flow_ml_s=10.0,
+        flow=ConstantFlow(10.0),
         max_runtime=timedelta(seconds=60),
         cooldown=timedelta(seconds=30),
     )
 
 
 def test_new_passport_with_zero_nominal_flow() -> None:
-    with pytest.raises(InvalidPumpPassportError):
+    # Проверка расхода теперь живёт в модели расхода, паспорт её не дублирует.
+    with pytest.raises(InvalidFlowCurveError):
         PumpPassport(
-            nominal_flow_ml_s=0.0,
+            flow=ConstantFlow(0.0),
             max_runtime=timedelta(seconds=60),
             cooldown=timedelta(seconds=30),
         )
@@ -37,7 +40,7 @@ def test_new_passport_with_zero_nominal_flow() -> None:
 def test_new_passport_with_zero_max_runtime() -> None:
     with pytest.raises(InvalidPumpPassportError):
         PumpPassport(
-            nominal_flow_ml_s=10.0,
+            flow=ConstantFlow(10.0),
             max_runtime=timedelta(seconds=0),
             cooldown=timedelta(seconds=30),
         )
@@ -46,7 +49,7 @@ def test_new_passport_with_zero_max_runtime() -> None:
 def test_new_passport_with_negative_cooldown() -> None:
     with pytest.raises(InvalidPumpPassportError):
         PumpPassport(
-            nominal_flow_ml_s=10.0,
+            flow=ConstantFlow(10.0),
             max_runtime=timedelta(seconds=60),
             cooldown=timedelta(seconds=-1),
         )
@@ -148,3 +151,11 @@ def test_pump_is_overrun_when_running_longer_than_max_runtime(passport: PumpPass
 def test_pump_is_not_overrun_when_pump_is_not_running(passport: PumpPassport) -> None:
     pump = Pump("pump-1", passport, state=PumpState.OFF, started_at=T0)
     assert pump.is_overrun(T0 + timedelta(seconds=61)) is False
+
+
+def test_pump_exposes_start_and_stop_times(passport: PumpPassport) -> None:
+    pump = Pump("pump-1", passport)
+    pump.mark_started(T0)
+    pump.mark_stopped(T0 + timedelta(seconds=10))
+    assert pump.started_at == T0
+    assert pump.stopped_at == T0 + timedelta(seconds=10)

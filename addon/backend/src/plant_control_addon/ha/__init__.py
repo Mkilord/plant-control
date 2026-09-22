@@ -1,0 +1,1 @@
+"""Связь с Home Assistant."""

@@ -23,3 +23,91 @@ class PumpStateUnknownError(PumpError):
 
 class InvalidPumpPassportError(PumpError):
     pass
+
+
+# --- Коллектор ---
+
+
+class CollectorError(Exception):
+    pass
+
+
+class InvalidCollectorError(CollectorError):
+    pass
+
+
+class UnknownValveError(CollectorError):
+    pass
+
+
+class ValveAlreadyOpenError(CollectorError):
+    pass
+
+
+class AnotherValveOpenError(CollectorError):
+    pass
+
+
+class CollectorStateUnknownError(CollectorError):
+    pass
+
+
+# --- Бак ---
+
+
+class TankError(Exception):
+    pass
+
+
+class InvalidTankError(TankError):
+    pass
+
+
+class NotEnoughWaterError(TankError):
+    pass
+
+
+class TankOverflowError(TankError):
+    pass
+
+
+# --- Гидравлика и расчёт полива ---
+
+
+class HydraulicsError(Exception):
+    pass
+
+
+class InvalidFlowCurveError(HydraulicsError):
+    pass
+
+
+class InvalidConnectionError(HydraulicsError):
+    pass
+
+
+class InvalidWateringRequestError(HydraulicsError):
+    pass
+
+
+class PumpCannotDeliverError(HydraulicsError):
+    pass
+
+
+# --- Поливальная машина ---
+
+
+class MachineError(Exception):
+    pass
+
+
+class InvalidMachineError(MachineError):
+    pass
+
+
+class UnknownRouteError(MachineError):
+    pass
+
+
+class MachineBusyError(MachineError):
+    pass

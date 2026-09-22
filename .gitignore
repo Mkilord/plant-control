@@ -9,3 +9,5 @@ build/
 *.egg-info/
 .idea/
 .vscode/
+.env
+addon/backend/data/

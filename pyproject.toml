@@ -9,6 +9,7 @@ dependencies = []
 [dependency-groups]
 dev = [
     "pytest",
+    "pytest-asyncio",
     "mypy",
     "ruff",
 ]
@@ -23,6 +24,7 @@ packages = ["src/plant_control"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+asyncio_mode = "auto"
 
 [tool.mypy]
 strict = true

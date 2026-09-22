@@ -12,6 +12,7 @@ from plant_control.domain.errors import (
     PumpRuntimeExceededError,
     PumpStateUnknownError,
 )
+from plant_control.domain.flow import FlowCurve
 
 
 # Аналог enum в Java. Значения можно не использовать, важны сами члены.
@@ -27,18 +28,15 @@ class PumpState(Enum):
 @dataclass(frozen=True, slots=True)
 class PumpPassport:
     # Поля объявляются с типом. Конструктор генерируется автоматически
-    # в том же порядке: PumpPassport(nominal_flow_ml_s=..., max_runtime=..., cooldown=...)
-    nominal_flow_ml_s: float
+    # в том же порядке: PumpPassport(flow=..., max_runtime=..., cooldown=...)
+    # flow - модель расхода насоса (flow.py): постоянная, линейная или табличная.
+    flow: FlowCurve
     max_runtime: timedelta
     cooldown: timedelta
 
     # Вызывается сразу после сгенерированного конструктора.
     # Аналог компактного конструктора record: здесь проверяем значения.
     def __post_init__(self) -> None:
-        if self.nominal_flow_ml_s <= 0:
-            raise InvalidPumpPassportError(
-                f"nominal_flow_ml_s must be positive, got {self.nominal_flow_ml_s}"
-            )
         if self.max_runtime <= timedelta(0):
             raise InvalidPumpPassportError(f"max_runtime must be positive, got {self.max_runtime}")
         if self.cooldown < timedelta(0):
@@ -79,6 +77,14 @@ class Pump:
     @property
     def state(self) -> PumpState:
         return self._state
+
+    @property
+    def started_at(self) -> datetime | None:
+        return self._started_at
+
+    @property
+    def stopped_at(self) -> datetime | None:
+        return self._stopped_at
 
     # --- Проверки ---
 
