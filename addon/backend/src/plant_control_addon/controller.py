@@ -15,6 +15,11 @@ from typing import Any
 from plant_control.application.health import HealthReport, HealthService
 from plant_control.application.notifications import Event, NotificationService
 from plant_control.application.ports import Clock, Sleeper
+from plant_control.application.queue import (
+    RequestSource,
+    WateringQueue,
+    WateringRequest,
+)
 from plant_control.application.safety_service import SafetyService
 from plant_control.application.watering_service import WateringService, WateringTimings
 from plant_control.domain.errors import MachineBusyError
@@ -50,6 +55,7 @@ class Controller:
         health: HealthService | None = None,
         health_source: HaHealthSource | None = None,
         notifications: NotificationService | None = None,
+        queue_tick: float = 0.1,
     ) -> None:
         self._registry = registry
         self._health = health
@@ -59,6 +65,9 @@ class Controller:
         self._clock: Clock = clock or SystemClock()
         self._sleeper: Sleeper = sleeper or AsyncioSleeper()
         self._background: set[asyncio.Task[Any]] = set()
+        # Очередь поливов: она же следит за группами питания.
+        # Сам контроллер для неё - исполнитель (метод water).
+        self.queue = WateringQueue(self, self._clock, registry.power_group, tick=queue_tick)
 
     def now(self) -> datetime:
         return self._clock.now()
@@ -87,16 +96,32 @@ class Controller:
         entry = self._registry.entry(machine_id)
         return await self._watering(entry).plan(machine_id, route_id, dose_ml)
 
-    async def start_watering(self, machine_id: str, route_id: str, dose_ml: float) -> WateringPlan:
-        """Проверить правила и запустить полив в фоне. Возвращает план."""
+    async def start_watering(
+        self,
+        machine_id: str,
+        route_id: str,
+        dose_ml: float,
+        source: RequestSource = RequestSource.MANUAL,
+    ) -> tuple[WateringPlan, WateringRequest]:
+        """Проверить правила и поставить полив в очередь. Возвращает план и заявку."""
+        entry = self._registry.entry(machine_id)
+        if self.is_busy(machine_id):
+            raise MachineBusyError(f"machine {machine_id!r} is watering")
+        # План считаем сразу: так неверная доза или пустой бак видны в ответе.
+        plan = await self._watering(entry).plan(machine_id, route_id, dose_ml)
+        request = self.queue.submit(machine_id, route_id, dose_ml, source=source)
+        return plan, request
+
+    def is_busy(self, machine_id: str) -> bool:
+        """Занята, если поливает или ждёт своей очереди."""
         entry = self._registry.entry(machine_id)
         if entry.is_busy:
-            raise MachineBusyError(f"machine {machine_id!r} is watering")
-        plan = await self._watering(entry).plan(machine_id, route_id, dose_ml)
-        entry.task = asyncio.create_task(
-            self._run_watering(entry, route_id, dose_ml), name=f"watering-{machine_id}"
-        )
-        return plan
+            return True
+        return any(not r.is_finished for r in self.queue.for_machine(machine_id))
+
+    async def water(self, machine_id: str, route_id: str, dose_ml: float) -> None:
+        """Исполнитель для очереди: полив от начала до конца."""
+        await self._run_watering(self._registry.entry(machine_id), route_id, dose_ml)
 
     async def _run_watering(self, entry: MachineEntry, route_id: str, dose_ml: float) -> None:
         started = self._clock.now()
@@ -130,6 +155,9 @@ class Controller:
             ok=error is None,
             error=error,
         )
+        if error is None:
+            # Расписание смотрит на это время: недавно политое растение пропускается.
+            entry.watered_at[route_id] = started
 
     async def _notify_watering(self, entry: MachineEntry, route_id: str, dose_ml: float) -> None:
         if self._notifications is None:
@@ -153,6 +181,7 @@ class Controller:
 
     async def emergency_stop(self, machine_id: str) -> list[Exception]:
         entry = self._registry.entry(machine_id)
+        await self._cancel_queue(machine_id)
         await self._cancel_watering(entry)
         return await self._safety(entry).emergency_stop(machine_id)
 
@@ -165,7 +194,7 @@ class Controller:
 
     async def safe_start_all(self) -> None:
         for entry in self._registry.entries():
-            if not entry.is_busy:
+            if not self.is_busy(entry.id):
                 await self.safe_start(entry.id)
 
     async def refill(self, machine_id: str, volume_ml: float | None) -> None:
@@ -188,8 +217,21 @@ class Controller:
         for task in list(self._background):
             task.cancel()
         for entry in self._registry.entries():
-            if entry.task is not None and not entry.task.done():
+            if entry.machine.is_busy or entry.id in self._queue_machines():
                 await self.emergency_stop(entry.id)
+
+    def _queue_machines(self) -> set[str]:
+        return {request.machine_id for request in self.queue.running()}
+
+    async def _cancel_queue(self, machine_id: str) -> None:
+        """Снять заявки машины и дождаться, пока прервётся текущий полив."""
+        cancelled = self.queue.cancel_machine(machine_id)
+        if cancelled:
+            # Отмена задачи доходит до полива не мгновенно.
+            for _ in range(200):
+                if not self._registry.entry(machine_id).machine.is_busy:
+                    break
+                await asyncio.sleep(0.005)
 
     # --- Проверка состояния ---
 

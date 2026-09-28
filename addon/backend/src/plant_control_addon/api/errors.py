@@ -21,6 +21,7 @@ from plant_control.domain.errors import (
     PumpStateUnknownError,
     TankError,
     TankOverflowError,
+    UnknownRequestError,
     UnknownRouteError,
     UnknownValveError,
     ValveAlreadyOpenError,
@@ -34,6 +35,7 @@ STATUS_BY_ERROR: list[tuple[type[Exception], int]] = [
     (UnknownMachineError, status.HTTP_404_NOT_FOUND),
     (UnknownRouteError, status.HTTP_404_NOT_FOUND),
     (UnknownValveError, status.HTTP_404_NOT_FOUND),
+    (UnknownRequestError, status.HTTP_404_NOT_FOUND),
     # Правило нарушено из-за текущего состояния: позже может получиться.
     (MachineBusyError, status.HTTP_409_CONFLICT),
     (PumpAlreadyRunningError, status.HTTP_409_CONFLICT),
@@ -54,6 +56,7 @@ STATUS_BY_ERROR: list[tuple[type[Exception], int]] = [
 
 HANDLED: tuple[type[Exception], ...] = (
     UnknownMachineError,
+    UnknownRequestError,
     PumpError,
     CollectorError,
     TankError,

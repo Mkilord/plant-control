@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from plant_control.application.health import HealthService
 from plant_control.application.notifications import NotificationService
 from plant_control.application.ports import Sleeper
+from plant_control.application.scheduler import SchedulerService
 from plant_control.domain.problems import ProblemBoard
 from pydantic import BaseModel
 
@@ -20,6 +21,8 @@ from plant_control_addon.api.ha_routes import HaGateway
 from plant_control_addon.api.ha_routes import router as ha_router
 from plant_control_addon.api.machines import router as machines_router
 from plant_control_addon.api.problems import router as problems_router
+from plant_control_addon.api.queue_routes import router as queue_router
+from plant_control_addon.api.queue_routes import schedules_router
 from plant_control_addon.controller import Controller, SystemClock
 from plant_control_addon.ha.client import HomeAssistantClient
 from plant_control_addon.health_source import HaHealthSource
@@ -49,6 +52,8 @@ def create_app(
     sleeper: Sleeper | None = None,
     watchdog_interval: float = 1.0,
     health_interval: float = 30.0,
+    schedule_interval: float = 30.0,
+    queue_tick: float = 0.1,
     mqtt: bool = True,
 ) -> FastAPI:
     """ha, data_dir и sleeper подменяют тесты. Без них всё берётся из настроек."""
@@ -65,7 +70,9 @@ def create_app(
         else:
             client = ha
 
-        registry = MachineRegistry(MachineStore((data_dir or settings.data_dir) / DB_NAME))
+        registry = MachineRegistry(
+            MachineStore((data_dir or settings.data_dir) / DB_NAME), settings.timezone
+        )
         await registry.load()
         clock = SystemClock()
         board = ProblemBoard()
@@ -87,6 +94,14 @@ def create_app(
             health=health,
             health_source=HaHealthSource(client, registry),
             notifications=notifications,
+            queue_tick=queue_tick,
+        )
+        scheduler = SchedulerService(
+            registry,
+            controller.queue,
+            clock,
+            notifications=notifications,
+            persist=lambda schedule: registry.save_schedules(schedule.machine_id),
         )
         client.add_state_listener(controller.on_state_changed)
         client.add_connect_listener(controller.on_connected)
@@ -103,9 +118,12 @@ def create_app(
 
         app.state.problems = board
         app.state.notifications = notifications
+        app.state.scheduler = scheduler
         tasks = [
             asyncio.create_task(controller.watchdog(watchdog_interval)),
             asyncio.create_task(controller.health_loop(health_interval)),
+            asyncio.create_task(controller.queue.run()),
+            asyncio.create_task(scheduler.run(schedule_interval)),
         ]
 
         # Мост в HA поднимается только если брокер вообще есть.
@@ -142,6 +160,8 @@ def create_app(
     app.include_router(ha_router)
     app.include_router(machines_router)
     app.include_router(problems_router)
+    app.include_router(queue_router)
+    app.include_router(schedules_router)
 
     @app.get("/api/health", tags=["service"])
     async def health() -> Health:

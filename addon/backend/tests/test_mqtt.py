@@ -62,9 +62,23 @@ def board() -> ProblemBoard:
 
 
 @pytest.fixture
-def bridge(registry: MachineRegistry, board: ProblemBoard, gateway: FakeGateway) -> MqttBridge:
-    controller = Controller(registry, gateway, clock=SystemClock())
+def controller(registry: MachineRegistry, gateway: FakeGateway) -> Controller:
+    return Controller(registry, gateway, clock=SystemClock())
+
+
+@pytest.fixture
+def bridge(registry: MachineRegistry, board: ProblemBoard, controller: Controller) -> MqttBridge:
     return MqttBridge(lambda: None, registry, controller, board)
+
+
+async def wait_idle(controller: Controller, machine_id: str) -> None:
+    """Очередь в тесте разбираем руками: фоновая задача здесь не запущена."""
+    controller.queue.dispatch()
+    for _ in range(500):
+        if not controller.is_busy(machine_id):
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError("machine is still busy")
 
 
 def entry_of(registry: MachineRegistry) -> MachineEntry:
@@ -151,15 +165,14 @@ async def test_tank_filled_button_fills_the_tank(
 
 
 async def test_water_button_starts_watering(
-    bridge: MqttBridge, registry: MachineRegistry, gateway: FakeGateway
+    bridge: MqttBridge, registry: MachineRegistry, controller: Controller, gateway: FakeGateway
 ) -> None:
     entry = entry_of(registry)
     entry.machine.tank.fill_full()
     before = entry.machine.tank.volume_ml
 
     await bridge.handle_command(f"plant_control/{entry.id}/cmd/water/main", "PRESS")
-    assert entry.task is not None
-    await entry.task
+    await wait_idle(controller, entry.id)
 
     assert entry.machine.tank.volume_ml < before
     assert gateway.commands() == ["turn_on switch.pump_1", "turn_off switch.pump_1"]

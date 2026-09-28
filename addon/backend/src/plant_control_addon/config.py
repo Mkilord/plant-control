@@ -8,14 +8,16 @@ build_machine собирает доменную машину из конфигу
 state_of снимает состояние обратно для сохранения.
 """
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Annotated, Any, Literal, Self
 
 from plant_control.domain.collector import Collector, Valve, ValveState
 from plant_control.domain.connection import Connection, Outlet, Route
 from plant_control.domain.flow import ConstantFlow, FlowCurve, LinearFlow, TableFlow
 from plant_control.domain.machine import WateringMachine
+from plant_control.domain.power import PowerGroup, solo_group
 from plant_control.domain.pump import Pump, PumpPassport, PumpState
+from plant_control.domain.schedule import DailyTime, IntervalRule, Rule, Schedule, WeeklyRule
 from plant_control.domain.tank import (
     HorizontalCylinder,
     MeasuredTank,
@@ -119,6 +121,43 @@ class PumpConfig(BaseModel):
     cooldown_s: float = Field(default=0, ge=0)
 
 
+# --- Расписание ---
+
+
+class WeeklyRuleConfig(BaseModel):
+    """По дням недели. 0 - понедельник, как в datetime.weekday."""
+
+    type: Literal["weekly"] = "weekly"
+    days: list[int] = Field(min_length=1)
+    times: list[time] = Field(min_length=1)
+
+
+class IntervalRuleConfig(BaseModel):
+    """Каждые N дней от даты начала."""
+
+    type: Literal["interval"] = "interval"
+    every_days: int = Field(ge=1)
+    times: list[time] = Field(min_length=1)
+    start_date: date | None = None
+
+
+RuleConfig = Annotated[WeeklyRuleConfig | IntervalRuleConfig, Field(discriminator="type")]
+
+
+class ScheduleConfig(BaseModel):
+    """Расписание одного растения. dose_ml не задана - берётся доза маршрута."""
+
+    enabled: bool = True
+    rule: RuleConfig
+    dose_ml: float | None = Field(default=None, gt=0)
+    # Сезонная поправка: летом больше, зимой меньше.
+    season_factor: float = Field(default=1.0, gt=0)
+    # Насколько можно опоздать и всё равно полить (add-on был выключен).
+    catch_up_h: float = Field(default=3, ge=0)
+    # Не поливать по расписанию, если недавно полили вручную.
+    min_gap_h: float = Field(default=6, ge=0)
+
+
 # --- Обвязка и маршруты ---
 
 
@@ -163,6 +202,7 @@ class RouteConfig(BaseModel):
     correction: float = Field(default=1.0, gt=0)
     # Доза по умолчанию: ей поливает кнопка в Home Assistant и интерфейс.
     default_dose_ml: float = Field(default=100, gt=0)
+    schedule: ScheduleConfig | None = None
 
 
 class TimingsConfig(BaseModel):
@@ -181,6 +221,12 @@ class MachineConfig(BaseModel):
     head_model: Literal["start", "mid", "stepwise"] = "mid"
     routes: list[RouteConfig] = Field(min_length=1)
     timings: TimingsConfig = TimingsConfig()
+    # Группа питания: машины одной группы делят блок питания. Пусто - машина сама по себе.
+    power_group: str = Field(default="", max_length=32)
+    # Сколько машин группы могут поливать разом: 1 - строго по очереди.
+    power_limit: int = Field(default=1, ge=1)
+    # Пауза между пусками в группе: пусковой ток одного насоса не должен совпасть с другим.
+    power_gap_s: float = Field(default=2, ge=0)
 
     @model_validator(mode="after")
     def check_routes(self) -> Self:
@@ -221,6 +267,8 @@ class MachineState(BaseModel):
     pump_stopped_at: datetime | None = None
     valve_states: dict[str, str] = {}
     supply_is_filled: bool = False
+    # Отработанные сроки расписаний по маршрутам: чтобы не полить один срок дважды.
+    schedule_runs: dict[str, datetime] = {}
 
 
 # --- Сборка домена ---
@@ -331,4 +379,64 @@ def state_of(machine: WateringMachine) -> MachineState:
         pump_stopped_at=machine.pump.stopped_at,
         valve_states=valves,
         supply_is_filled=machine.supply_is_filled,
+    )
+
+
+def _rule(cfg: RuleConfig) -> Rule:
+    times = tuple(DailyTime(t.hour, t.minute) for t in cfg.times)
+    match cfg:
+        case WeeklyRuleConfig():
+            return WeeklyRule(days=frozenset(cfg.days), times=times)
+        case IntervalRuleConfig():
+            # Без даты начала считаем от сегодня: "каждые 3 дня, начиная с сегодня".
+            return IntervalRule(cfg.every_days, times, cfg.start_date or date.today())
+
+
+def build_schedule(
+    machine_id: str,
+    route: RouteConfig,
+    timezone: str,
+    last_run_at: datetime | None = None,
+) -> Schedule | None:
+    """Расписание маршрута. None - расписания нет."""
+    cfg = route.schedule
+    if cfg is None:
+        return None
+    return Schedule(
+        f"{machine_id}:{route.id}",
+        machine_id=machine_id,
+        route_id=route.id,
+        dose_ml=cfg.dose_ml or route.default_dose_ml,
+        rule=_rule(cfg.rule),
+        timezone=timezone,
+        enabled=cfg.enabled,
+        catch_up=timedelta(hours=cfg.catch_up_h),
+        min_gap_after_watering=timedelta(hours=cfg.min_gap_h),
+        season_factor=cfg.season_factor,
+        last_run_at=last_run_at,
+    )
+
+
+def build_schedules(
+    machine_id: str, config: MachineConfig, state: MachineState, timezone: str
+) -> dict[str, Schedule]:
+    schedules = {}
+    for route in config.routes:
+        schedule = build_schedule(machine_id, route, timezone, state.schedule_runs.get(route.id))
+        if schedule is not None:
+            schedules[route.id] = schedule
+    return schedules
+
+
+def power_group_of(machine_id: str, configs: dict[str, MachineConfig]) -> PowerGroup:
+    """Группа питания машины. Предел берём самый строгий из заявленных её участниками."""
+    config = configs.get(machine_id)
+    if config is None or not config.power_group:
+        return solo_group(machine_id)
+    members = [c for c in configs.values() if c.power_group == config.power_group]
+    return PowerGroup(
+        id=config.power_group,
+        name=config.power_group,
+        max_concurrent=min(c.power_limit for c in members),
+        min_start_gap=timedelta(seconds=max(c.power_gap_s for c in members)),
     )

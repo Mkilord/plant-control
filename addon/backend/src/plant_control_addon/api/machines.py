@@ -5,13 +5,14 @@
 """
 
 import dataclasses
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, Field
 
-from plant_control_addon.config import MachineConfig
+from plant_control_addon.api.queue_routes import QueueItemOut, queue_item_out
+from plant_control_addon.config import MachineConfig, ScheduleConfig
 from plant_control_addon.controller import Controller
 from plant_control_addon.registry import MachineEntry, MachineRegistry
 
@@ -55,6 +56,14 @@ class WateringResultOut(BaseModel):
     error: str | None
 
 
+class ScheduleStatus(BaseModel):
+    route_id: str
+    enabled: bool
+    dose_ml: float
+    next_run_at: datetime | None
+    last_run_at: datetime | None
+
+
 class MachineStatus(BaseModel):
     busy: bool
     tank: TankStatus
@@ -62,6 +71,8 @@ class MachineStatus(BaseModel):
     valves: dict[str, str]
     supply_is_filled: bool
     last_watering: WateringResultOut | None
+    schedules: list[ScheduleStatus] = []
+    queue: list[QueueItemOut] = []
 
 
 class MachineOut(BaseModel):
@@ -97,11 +108,19 @@ class VolumeRequest(BaseModel):
     volume_ml: float = Field(ge=0)
 
 
+class StartOut(BaseModel):
+    """Полив принят: план и место в очереди."""
+
+    plan: PlanOut
+    request: QueueItemOut
+
+
 class StopOut(BaseModel):
     errors: list[str]
 
 
-def machine_out(entry: MachineEntry) -> MachineOut:
+def machine_out(entry: MachineEntry, control: Controller | None = None) -> MachineOut:
+    now = control.now() if control else datetime.now(UTC)
     machine = entry.machine
     tank = machine.tank
     pump = machine.pump
@@ -111,7 +130,7 @@ def machine_out(entry: MachineEntry) -> MachineOut:
         id=entry.id,
         config=entry.config,
         status=MachineStatus(
-            busy=entry.is_busy,
+            busy=control.is_busy(entry.id) if control else entry.is_busy,
             tank=TankStatus(
                 volume_ml=tank.volume_ml,
                 usable_ml=tank.usable_volume_ml,
@@ -129,6 +148,22 @@ def machine_out(entry: MachineEntry) -> MachineOut:
             ),
             supply_is_filled=machine.supply_is_filled,
             last_watering=WateringResultOut(**dataclasses.asdict(last)) if last else None,
+            schedules=[
+                ScheduleStatus(
+                    route_id=route_id,
+                    enabled=schedule.enabled,
+                    dose_ml=schedule.dose_ml,
+                    next_run_at=schedule.next_run_at(now),
+                    last_run_at=schedule.last_run_at,
+                )
+                for route_id, schedule in entry.schedules.items()
+            ],
+            queue=[
+                queue_item_out(request, control.queue.position(request.id))
+                for request in control.queue.for_machine(entry.id)
+            ]
+            if control
+            else [],
         ),
     )
 
@@ -139,20 +174,20 @@ router = APIRouter(prefix="/api/machines", tags=["machines"])
 
 
 @router.get("")
-async def list_machines(registry: Registry) -> list[MachineOut]:
-    return [machine_out(entry) for entry in registry.entries()]
+async def list_machines(registry: Registry, control: Control) -> list[MachineOut]:
+    return [machine_out(entry, control) for entry in registry.entries()]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_machine(config: MachineConfig, registry: Registry, control: Control) -> MachineOut:
     entry = await registry.create(config)
     await control.safe_start(entry.id)
-    return machine_out(entry)
+    return machine_out(entry, control)
 
 
 @router.get("/{machine_id}")
-async def get_machine(machine_id: str, registry: Registry) -> MachineOut:
-    return machine_out(registry.entry(machine_id))
+async def get_machine(machine_id: str, registry: Registry, control: Control) -> MachineOut:
+    return machine_out(registry.entry(machine_id), control)
 
 
 @router.put("/{machine_id}")
@@ -162,7 +197,7 @@ async def update_machine(
     entry = await registry.update(machine_id, config)
     # Реле могли поменяться: привести новое железо в безопасное состояние.
     await control.safe_start(machine_id)
-    return machine_out(entry)
+    return machine_out(entry, control)
 
 
 @router.delete("/{machine_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -182,10 +217,13 @@ async def plan_watering(machine_id: str, body: WateringRequest, control: Control
 
 
 @router.post("/{machine_id}/water", status_code=status.HTTP_202_ACCEPTED)
-async def start_watering(machine_id: str, body: WateringRequest, control: Control) -> PlanOut:
-    """Запускает полив в фоне и сразу отвечает планом. Ход полива - в статусе машины."""
-    plan = await control.start_watering(machine_id, body.route_id, body.dose_ml)
-    return PlanOut(**dataclasses.asdict(plan))
+async def start_watering(machine_id: str, body: WateringRequest, control: Control) -> StartOut:
+    """Ставит полив в очередь и сразу отвечает планом. Ход полива - в статусе машины."""
+    plan, request = await control.start_watering(machine_id, body.route_id, body.dose_ml)
+    return StartOut(
+        plan=PlanOut(**dataclasses.asdict(plan)),
+        request=queue_item_out(request, control.queue.position(request.id)),
+    )
 
 
 @router.post("/{machine_id}/stop")
@@ -199,7 +237,7 @@ async def refill_tank(
     machine_id: str, body: RefillRequest, registry: Registry, control: Control
 ) -> MachineOut:
     await control.refill(machine_id, body.volume_ml)
-    return machine_out(registry.entry(machine_id))
+    return machine_out(registry.entry(machine_id), control)
 
 
 @router.put("/{machine_id}/tank/volume")
@@ -208,4 +246,27 @@ async def set_tank_volume(
 ) -> MachineOut:
     """Объём измерен на глаз или по датчику: заменить расчётный."""
     await control.set_tank_volume(machine_id, body.volume_ml)
-    return machine_out(registry.entry(machine_id))
+    return machine_out(registry.entry(machine_id), control)
+
+
+# --- Расписание маршрута ---
+
+
+@router.put("/{machine_id}/routes/{route_id}/schedule")
+async def set_schedule(
+    machine_id: str,
+    route_id: str,
+    body: ScheduleConfig,
+    registry: Registry,
+    control: Control,
+) -> MachineOut:
+    entry = await registry.set_schedule(machine_id, route_id, body)
+    return machine_out(entry, control)
+
+
+@router.delete("/{machine_id}/routes/{route_id}/schedule")
+async def clear_schedule(
+    machine_id: str, route_id: str, registry: Registry, control: Control
+) -> MachineOut:
+    entry = await registry.set_schedule(machine_id, route_id, None)
+    return machine_out(entry, control)
