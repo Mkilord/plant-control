@@ -10,6 +10,7 @@ dependencies = [
     "aiohttp>=3.10",
     "pydantic-settings>=2.4",
     "aiomqtt>=2.3",
+    "tzdata; sys_platform == 'win32'",
 ]
 
 [dependency-groups]

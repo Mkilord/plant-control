@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 
 from plant_control_addon.api.app import create_app
-from tests.conftest import FakeGateway, running
+from tests.conftest import FakeGateway, running, settings
 from tests.test_machines_api import COLLECTOR, SIMPLE, create, wait_idle
 
 EVERY_DAY = {
@@ -73,11 +73,15 @@ async def test_interval_schedule_survives_restart(gateway: FakeGateway, tmp_path
             "start_date": "2026-09-01",
         },
     }
-    async with running(create_app(ha=gateway, data_dir=tmp_path, mqtt=False)) as api:
+    async with running(
+        create_app(ha=gateway, settings=settings(), data_dir=tmp_path, mqtt=False)
+    ) as api:
         machine_id = (await create(api, SIMPLE))["id"]
         await api.put(f"/api/machines/{machine_id}/routes/main/schedule", json=rule)
 
-    async with running(create_app(ha=gateway, data_dir=tmp_path, mqtt=False)) as api:
+    async with running(
+        create_app(ha=gateway, settings=settings(), data_dir=tmp_path, mqtt=False)
+    ) as api:
         listed = (await api.get("/api/schedules")).json()
         assert len(listed) == 1
         # Дозы в расписании нет - берётся доза маршрута.
@@ -154,7 +158,9 @@ async def test_unknown_request_is_404(api: httpx.AsyncClient) -> None:
 
 async def test_one_power_group_waters_one_by_one(gateway: FakeGateway, tmp_path: Path) -> None:
     # Два насоса от одного блока питания: второй должен ждать первого.
-    app = create_app(ha=gateway, data_dir=tmp_path, mqtt=False, queue_tick=0.02)
+    app = create_app(
+        ha=gateway, settings=settings(), data_dir=tmp_path, mqtt=False, queue_tick=0.02
+    )
     async with running(app) as api:
         slow = with_group("usb", 1, "Фикус")
         slow["pump"]["flow"] = {"model": "constant", "flow_ml_s": 200}
@@ -180,7 +186,9 @@ async def test_one_power_group_waters_one_by_one(gateway: FakeGateway, tmp_path:
 async def test_machines_without_a_group_water_at_the_same_time(
     gateway: FakeGateway, tmp_path: Path
 ) -> None:
-    app = create_app(ha=gateway, data_dir=tmp_path, mqtt=False, queue_tick=0.02)
+    app = create_app(
+        ha=gateway, settings=settings(), data_dir=tmp_path, mqtt=False, queue_tick=0.02
+    )
     async with running(app) as api:
         slow = copy.deepcopy(COLLECTOR)
         slow["pump"]["flow"] = {"model": "constant", "flow_ml_s": 200}
@@ -213,3 +221,25 @@ async def test_busy_machine_rejects_a_second_manual_watering(api: httpx.AsyncCli
     assert first.json()["request"]["state"] == "queued"
     assert second.status_code == 409
     await wait_idle(api, machine_id)
+
+
+# --- Часовой пояс ---
+
+
+def test_unknown_timezone_falls_back_to_utc() -> None:
+    """Без базы часовых поясов (так бывает в Windows) add-on не должен падать."""
+    assert settings(timezone="Europe/Moscow").checked_timezone in ("Europe/Moscow", "UTC")
+    assert settings(timezone="Nowhere/Nothing").checked_timezone == "UTC"
+    assert settings(timezone="Nowhere/Nothing").notification_rules.timezone == "UTC"
+
+
+async def test_schedule_works_with_a_broken_timezone(gateway: FakeGateway, tmp_path: Path) -> None:
+    app = create_app(
+        ha=gateway, settings=settings(timezone="Nowhere/Nothing"), data_dir=tmp_path, mqtt=False
+    )
+    async with running(app) as api:
+        machine_id = (await create(api, SIMPLE))["id"]
+        response = await api.put(f"/api/machines/{machine_id}/routes/main/schedule", json=EVERY_DAY)
+
+        assert response.status_code == 200
+        assert response.json()["status"]["schedules"][0]["next_run_at"] is not None

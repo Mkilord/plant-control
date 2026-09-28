@@ -48,6 +48,7 @@ class Health(BaseModel):
 def create_app(
     *,
     ha: HaGateway | None = None,
+    settings: Settings | None = None,
     data_dir: Path | None = None,
     sleeper: Sleeper | None = None,
     watchdog_interval: float = 1.0,
@@ -56,12 +57,15 @@ def create_app(
     queue_tick: float = 0.1,
     mqtt: bool = True,
 ) -> FastAPI:
-    """ha, data_dir и sleeper подменяют тесты. Без них всё берётся из настроек."""
+    """ha, settings, data_dir и sleeper подменяют тесты. Без них всё берётся из настроек."""
+
+    # Имя параметра занято внутри lifespan, поэтому запоминаем отдельно.
+    given_settings = settings
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Всё до yield выполняется при старте, после yield - при остановке.
-        settings = Settings()
+        settings = given_settings or Settings()
         client: HaGateway
         real_client: HomeAssistantClient | None = None
         if ha is None:
@@ -71,7 +75,7 @@ def create_app(
             client = ha
 
         registry = MachineRegistry(
-            MachineStore((data_dir or settings.data_dir) / DB_NAME), settings.timezone
+            MachineStore((data_dir or settings.data_dir) / DB_NAME), settings.checked_timezone
         )
         await registry.load()
         clock = SystemClock()
@@ -176,7 +180,7 @@ def create_app(
         )
 
     # Фронт подключается последним: всё, что не /api, отдаётся как статика.
-    static_dir = static_dir_from(Settings())
+    static_dir = static_dir_from(given_settings or Settings())
     if static_dir is not None:
         app.mount("/", StaticFiles(directory=static_dir, html=True), name="frontend")
 

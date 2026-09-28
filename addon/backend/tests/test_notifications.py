@@ -11,7 +11,7 @@ from plant_control_addon.api.app import create_app
 from plant_control_addon.ha.client import HomeAssistantUnavailableError
 from plant_control_addon.notifications import HaEventSink, HaNotifier, message_for
 from plant_control_addon.settings import Settings
-from tests.conftest import FakeGateway, running
+from tests.conftest import FakeGateway, running, settings
 from tests.test_machines_api import SIMPLE, create, wait_idle
 
 T0 = datetime(2026, 9, 28, 12, 0, tzinfo=UTC)
@@ -128,7 +128,7 @@ class BrokenPumpGateway(FakeGateway):
 
 async def test_failed_watering_notifies(tmp_path: Path) -> None:
     gateway = BrokenPumpGateway()
-    app = create_app(ha=gateway, data_dir=tmp_path, mqtt=False)
+    app = create_app(ha=gateway, settings=settings(), data_dir=tmp_path, mqtt=False)
     async with running(app) as api:
         machine_id = (await create(api, SIMPLE))["id"]
         await api.post(f"/api/machines/{machine_id}/tank/refill", json={})

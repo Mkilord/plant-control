@@ -15,6 +15,7 @@ from plant_control_addon.ha.client import (
     HomeAssistantUnavailableError,
     StateListener,
 )
+from plant_control_addon.settings import Settings
 
 
 class FakeGateway:
@@ -75,12 +76,19 @@ def gateway() -> FakeGateway:
     return FakeGateway()
 
 
+def settings(**values: object) -> Settings:
+    """Настройки для тестов: .env разработчика не читается, иначе тесты зависят от машины."""
+    return Settings(_env_file=None, **values)  # type: ignore[call-arg, arg-type]
+
+
 AppFactory = Callable[[], Any]
 
 
 @pytest.fixture
 async def api(gateway: FakeGateway, tmp_path: Path) -> AsyncIterator[httpx.AsyncClient]:
-    app = create_app(ha=gateway, data_dir=tmp_path, watchdog_interval=0.05, mqtt=False)
+    app = create_app(
+        ha=gateway, settings=settings(), data_dir=tmp_path, watchdog_interval=0.05, mqtt=False
+    )
     async with running(app) as client:
         yield client
 

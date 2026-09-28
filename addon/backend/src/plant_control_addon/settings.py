@@ -6,12 +6,16 @@
 - при разработке: адрес HA и долгоживущий токен из .env или переменных окружения.
 """
 
+import logging
 from datetime import time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from plant_control.application.notifications import DEFAULT_KINDS, EventKind, NotificationRules
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+log = logging.getLogger(__name__)
 
 SUPERVISOR_WS_URL = "ws://supervisor/core/websocket"
 
@@ -53,6 +57,19 @@ class Settings(BaseSettings):
     supervisor_token: str = Field(default="", validation_alias="SUPERVISOR_TOKEN")
 
     @property
+    def checked_timezone(self) -> str:
+        """Часовой пояс, который система действительно знает. Иначе UTC и запись в журнал.
+
+        В Windows базы часовых поясов нет вовсе: её приносит пакет tzdata.
+        """
+        try:
+            ZoneInfo(self.timezone)
+        except Exception:
+            log.warning("unknown timezone %r, falling back to UTC", self.timezone)
+            return "UTC"
+        return self.timezone
+
+    @property
     def notification_rules(self) -> NotificationRules:
         kinds = DEFAULT_KINDS
         if self.notify_events.strip():
@@ -62,7 +79,7 @@ class Settings(BaseSettings):
             kinds=kinds,
             quiet_from=_parse_time(self.notify_quiet_from),
             quiet_to=_parse_time(self.notify_quiet_to),
-            timezone=self.timezone,
+            timezone=self.checked_timezone,
         )
 
     @property

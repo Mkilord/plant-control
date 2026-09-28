@@ -10,7 +10,7 @@ import pytest
 
 from plant_control_addon.api.app import create_app
 from plant_control_addon.ha.client import EntityState
-from tests.conftest import FakeGateway, running
+from tests.conftest import FakeGateway, running, settings
 
 # Простая поливалка: бак 2 л (цилиндр 130 x 151 мм), 500 мл запаса,
 # насос 1000 мл/с, чтобы поливы в тестах шли за доли секунды.
@@ -136,11 +136,15 @@ async def test_delete(api: httpx.AsyncClient) -> None:
 
 
 async def test_machines_survive_restart(gateway: FakeGateway, tmp_path: Path) -> None:
-    async with running(create_app(ha=gateway, data_dir=tmp_path, mqtt=False)) as api:
+    async with running(
+        create_app(ha=gateway, settings=settings(), data_dir=tmp_path, mqtt=False)
+    ) as api:
         machine_id = (await create(api, SIMPLE))["id"]
         await api.put(f"/api/machines/{machine_id}/tank/volume", json={"volume_ml": 900})
 
-    async with running(create_app(ha=gateway, data_dir=tmp_path, mqtt=False)) as api:
+    async with running(
+        create_app(ha=gateway, settings=settings(), data_dir=tmp_path, mqtt=False)
+    ) as api:
         body = (await api.get(f"/api/machines/{machine_id}")).json()
     assert body["config"]["name"] == "Фикус"
     assert body["status"]["tank"]["volume_ml"] == pytest.approx(900)

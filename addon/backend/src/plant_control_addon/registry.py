@@ -82,12 +82,13 @@ class MachineRegistry:
                 # Сломанная запись не должна мешать остальным машинам.
                 log.exception("cannot load machine %s, skipped", row.id)
                 continue
-            self._entries[row.id] = MachineEntry(
-                row.id,
-                config,
-                machine,
-                schedules=build_schedules(row.id, config, state, self._timezone),
-            )
+            try:
+                schedules = build_schedules(row.id, config, state, self._timezone)
+            except Exception:
+                # Машина важнее расписания: без расписаний она всё равно поливает по кнопке.
+                log.exception("cannot load schedules of machine %s, skipped", row.id)
+                schedules = {}
+            self._entries[row.id] = MachineEntry(row.id, config, machine, schedules=schedules)
 
     # --- Порт MachineRepository ---
 
