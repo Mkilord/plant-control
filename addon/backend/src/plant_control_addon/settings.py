@@ -25,6 +25,16 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     # Собранный фронт. Не задано - берётся папка static внутри пакета (так в add-on'е).
     static_dir: Path | None = None
+
+    # MQTT: сущности машин в Home Assistant. Внутри add-on'а данные брокера
+    # выдаёт Supervisor, при разработке их задают здесь.
+    mqtt_enabled: bool = True
+    mqtt_host: str = ""
+    mqtt_port: int = 1883
+    mqtt_user: str = ""
+    mqtt_password: str = ""
+    # Префикс, по которому Home Assistant ищет описания сущностей.
+    mqtt_discovery_prefix: str = "homeassistant"
     # Токен Supervisor читается без префикса: так его называет сам HA.
     supervisor_token: str = Field(default="", validation_alias="SUPERVISOR_TOKEN")
 

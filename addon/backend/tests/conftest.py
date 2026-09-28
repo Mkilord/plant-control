@@ -68,7 +68,7 @@ AppFactory = Callable[[], Any]
 
 @pytest.fixture
 async def api(gateway: FakeGateway, tmp_path: Path) -> AsyncIterator[httpx.AsyncClient]:
-    app = create_app(ha=gateway, data_dir=tmp_path, watchdog_interval=0.05)
+    app = create_app(ha=gateway, data_dir=tmp_path, watchdog_interval=0.05, mqtt=False)
     async with running(app) as client:
         yield client
 

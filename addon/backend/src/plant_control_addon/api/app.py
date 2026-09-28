@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,9 +22,13 @@ from plant_control_addon.api.problems import router as problems_router
 from plant_control_addon.controller import Controller, SystemClock
 from plant_control_addon.ha.client import HomeAssistantClient
 from plant_control_addon.health_source import HaHealthSource
+from plant_control_addon.mqtt.bridge import MqttBridge
+from plant_control_addon.mqtt.transport import resolve_broker, session_factory
 from plant_control_addon.registry import MachineRegistry
 from plant_control_addon.settings import Settings
 from plant_control_addon.storage import MachineStore
+
+log = logging.getLogger(__name__)
 
 DB_NAME = "plant_control.db"
 PACKAGE_STATIC = Path(__file__).resolve().parent.parent / "static"
@@ -42,6 +47,7 @@ def create_app(
     sleeper: Sleeper | None = None,
     watchdog_interval: float = 1.0,
     health_interval: float = 30.0,
+    mqtt: bool = True,
 ) -> FastAPI:
     """ha, data_dir и sleeper подменяют тесты. Без них всё берётся из настроек."""
 
@@ -84,12 +90,33 @@ def create_app(
             await controller.safe_start_all()
 
         app.state.problems = board
-        watchdog = asyncio.create_task(controller.watchdog(watchdog_interval))
-        health_task = asyncio.create_task(controller.health_loop(health_interval))
+        tasks = [
+            asyncio.create_task(controller.watchdog(watchdog_interval)),
+            asyncio.create_task(controller.health_loop(health_interval)),
+        ]
+
+        # Мост в HA поднимается только если брокер вообще есть.
+        bridge: MqttBridge | None = None
+        if mqtt and settings.mqtt_enabled:
+            broker = await resolve_broker(settings)
+            if broker is None:
+                log.info("mqtt is off: no broker configured")
+            else:
+                log.info("mqtt broker %s:%s", broker.host, broker.port)
+                bridge = MqttBridge(
+                    session_factory(broker),
+                    registry,
+                    controller,
+                    board,
+                    discovery_prefix=settings.mqtt_discovery_prefix,
+                )
+                tasks.append(asyncio.create_task(bridge.run()))
+        app.state.mqtt = bridge
+
         try:
             yield
         finally:
-            for task in (watchdog, health_task):
+            for task in tasks:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task

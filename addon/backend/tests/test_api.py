@@ -47,7 +47,7 @@ async def test_frontend_is_served_when_built(gateway: FakeGateway, tmp_path: Pat
     (static / "index.html").write_text("<html>plant control</html>", encoding="utf-8")
     os.environ["PLANT_CONTROL_STATIC_DIR"] = str(static)
     try:
-        app = create_app(ha=gateway, data_dir=tmp_path)
+        app = create_app(ha=gateway, data_dir=tmp_path, mqtt=False)
     finally:
         del os.environ["PLANT_CONTROL_STATIC_DIR"]
     async with running(app) as client:

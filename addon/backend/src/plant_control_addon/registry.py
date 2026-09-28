@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from plant_control.domain.collector import ValveState
-from plant_control.domain.errors import MachineBusyError
+from plant_control.domain.errors import MachineBusyError, UnknownRouteError
 from plant_control.domain.machine import WateringMachine
 
 from plant_control_addon.config import (
@@ -126,6 +126,19 @@ class MachineRegistry:
         entry = MachineEntry(machine_id, config, machine, last_watering=old.last_watering)
         self._entries[machine_id] = entry
         return entry
+
+    async def set_route_dose(self, machine_id: str, route_id: str, dose_ml: float) -> None:
+        """Доза по умолчанию для растения. Машину не пересобираем: расчёт от неё не зависит."""
+        entry = self.entry(machine_id)
+        config = entry.config.model_copy(deep=True)
+        for route in config.routes:
+            if route.id == route_id:
+                route.default_dose_ml = dose_ml
+                break
+        else:
+            raise UnknownRouteError(f"unknown route {route_id!r}")
+        entry.config = config
+        await self._store.upsert(machine_id, config, state_of(entry.machine))
 
     async def delete(self, machine_id: str) -> None:
         entry = self.entry(machine_id)

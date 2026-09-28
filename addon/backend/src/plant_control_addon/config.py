@@ -161,6 +161,8 @@ class RouteConfig(BaseModel):
     connection: ConnectionConfig
     outlet_height_mm: float
     correction: float = Field(default=1.0, gt=0)
+    # Доза по умолчанию: ей поливает кнопка в Home Assistant и интерфейс.
+    default_dose_ml: float = Field(default=100, gt=0)
 
 
 class TimingsConfig(BaseModel):
