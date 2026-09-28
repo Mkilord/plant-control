@@ -1,0 +1,42 @@
+# Описание add-on'а для Home Assistant.
+# Supervisor читает этот файл: имя, права, порты, настройки.
+name: PlantControl
+version: "0.1.0"
+slug: plant_control
+description: Адресный полив растений: свои машины, расписания, очередь и проблемы
+url: https://github.com/mkilord/plant-control
+arch:
+  - amd64
+  - aarch64
+  - armv7
+init: false
+# Интерфейс открывается внутри Home Assistant, отдельный порт наружу не нужен.
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:watering-can
+panel_title: PlantControl
+# Доступ к API Home Assistant: включать реле насосов и клапанов.
+homeassistant_api: true
+hassio_api: true
+# Брокер MQTT, если он есть: из него Home Assistant получает сущности машин.
+services:
+  - mqtt:want
+# База машин лежит в /data: эту папку Supervisor сохраняет между обновлениями.
+options:
+  log_level: info
+  timezone: Europe/Moscow
+  mqtt_enabled: true
+  notify_enabled: true
+  notify_service: persistent_notification.create
+  notify_events: ""
+  notify_quiet_from: ""
+  notify_quiet_to: ""
+schema:
+  log_level: list(debug|info|warning|error)
+  timezone: str
+  mqtt_enabled: bool
+  notify_enabled: bool
+  notify_service: str
+  notify_events: str
+  notify_quiet_from: str
+  notify_quiet_to: str

@@ -12,12 +12,20 @@
   - `connection.py` - трубка, выход у растения, маршрут
   - `watering.py` - расчет полива: доза, лишний объем трубок, напор, время
   - `machine.py` - поливальная машина, корень агрегата
+  - `schedule.py` - расписание: по дням недели или каждые N дней, решение "ждать, полить, пропустить"
+  - `problems.py` - доска проблем: наблюдения, авто-открытие и авто-закрытие
+  - `power.py` - группа питания: сколько машин могут поливать разом
 - `src/plant_control/application` - порты и сервисы
   - `watering_service.py` - сценарий полива: клапан, насос, паузы, безопасное завершение
   - `safety_service.py` - безопасный старт, аварийная остановка, сторож насоса
   - `pump_service.py` - ручное включение и выключение насоса
-- `addon/backend` - бэкенд add-on'а Home Assistant: REST API и связь с HA
+  - `queue.py` - очередь поливов: одна машина за раз, предел по группе питания, приоритет ручных заявок
+  - `scheduler.py` - планировщик: решение расписания превращается в заявку очереди
+  - `health.py` - проверка состояния машин, из неё берутся проблемы
+  - `notifications.py` - события и правила уведомлений (виды, тихие часы)
+- `addon/backend` - бэкенд add-on'а Home Assistant: REST API, связь с HA, MQTT, уведомления
 - `addon/frontend` - веб-интерфейс на Vue 3 и TypeScript
+- `config.yaml`, `Dockerfile`, `run.py` - упаковка в add-on Home Assistant (описание в `addon/README.md`)
 - `experiments` - стенд для сравнения стратегий расчета, в ядро не входит
 - `tests` - тесты, повторяют структуру `src`
 
@@ -54,10 +62,20 @@ uv run python -m plant_control_addon
 
 - `GET/POST /api/machines`, `GET/PUT/DELETE /api/machines/{id}` - конфигурация машин
 - `POST /api/machines/{id}/plan` - расчет полива без запуска
-- `POST /api/machines/{id}/water` - полив в фоне, ход полива виден в статусе машины
+- `POST /api/machines/{id}/water` - полив: заявка в очередь, в ответе план и место в очереди
 - `POST /api/machines/{id}/stop` - аварийная остановка
 - `POST /api/machines/{id}/tank/refill`, `PUT /api/machines/{id}/tank/volume` - долив и измеренный объем
+- `PUT/DELETE /api/machines/{id}/routes/{route_id}/schedule` - расписание растения
+- `GET /api/schedules`, `POST /api/schedules/check` - расписания и проверка по требованию
+- `GET/POST /api/queue`, `DELETE /api/queue/{id}` - очередь поливов и отмена заявки
+- `GET /api/problems`, `POST /api/problems/check`, `.../ack`, `.../mute`, `.../unmute` - проблемы
 - `GET /api/ha/entities` - реле из Home Assistant для выбора в настройках
+
+## Установка в Home Assistant
+
+Репозиторий кладётся в папку `addons` на машине с Home Assistant (например `/addons/plant_control`),
+после чего add-on появляется в Settings - Add-ons - Add-on Store как локальный. Интерфейс
+открывается внутри Home Assistant через Ingress. Настройки и что появляется в HA - в `addon/README.md`.
 
 ## Веб-интерфейс
 
