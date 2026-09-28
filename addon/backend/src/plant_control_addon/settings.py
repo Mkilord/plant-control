@@ -6,8 +6,10 @@
 - при разработке: адрес HA и долгоживущий токен из .env или переменных окружения.
 """
 
+from datetime import time
 from pathlib import Path
 
+from plant_control.application.notifications import DEFAULT_KINDS, EventKind, NotificationRules
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -35,8 +37,33 @@ class Settings(BaseSettings):
     mqtt_password: str = ""
     # Префикс, по которому Home Assistant ищет описания сущностей.
     mqtt_discovery_prefix: str = "homeassistant"
+    # Уведомления в Home Assistant. persistent_notification.create есть всегда,
+    # notify.<сервис> - телефон, телеграм и прочее, если настроено в HA.
+    notify_enabled: bool = True
+    notify_service: str = "persistent_notification.create"
+    # Виды событий через запятую. Пусто - виды по умолчанию (сбои и проблемы).
+    notify_events: str = ""
+    # Тихие часы, например 23:00 и 07:00. Срочное придёт и в них.
+    notify_quiet_from: str = ""
+    notify_quiet_to: str = ""
+    # Часовой пояс для расписаний и тихих часов.
+    timezone: str = "UTC"
+
     # Токен Supervisor читается без префикса: так его называет сам HA.
     supervisor_token: str = Field(default="", validation_alias="SUPERVISOR_TOKEN")
+
+    @property
+    def notification_rules(self) -> NotificationRules:
+        kinds = DEFAULT_KINDS
+        if self.notify_events.strip():
+            names = [name.strip() for name in self.notify_events.split(",") if name.strip()]
+            kinds = frozenset(EventKind(name) for name in names)
+        return NotificationRules(
+            kinds=kinds,
+            quiet_from=_parse_time(self.notify_quiet_from),
+            quiet_to=_parse_time(self.notify_quiet_to),
+            timezone=self.timezone,
+        )
 
     @property
     def ha_websocket_url(self) -> str:
@@ -54,3 +81,10 @@ class Settings(BaseSettings):
         if not token:
             raise ValueError("set PLANT_CONTROL_HA_TOKEN or run inside Home Assistant")
         return token
+
+
+def _parse_time(value: str) -> time | None:
+    """ "23:00" -> time(23, 0). Пустая строка - времени нет."""
+    if not value.strip():
+        return None
+    return time.fromisoformat(value.strip())

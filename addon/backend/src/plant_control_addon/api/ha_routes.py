@@ -4,7 +4,7 @@
 и для первой проверки на железе: включить и выключить реле руками.
 """
 
-from typing import Annotated, Protocol
+from typing import Annotated, Any, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -27,6 +27,10 @@ class HaGateway(Protocol):
     async def get_states(self) -> list[EntityState]: ...
 
     async def call_service(self, domain: str, service: str, entity_id: str) -> None: ...
+
+    async def call_service_data(self, domain: str, service: str, data: dict[str, Any]) -> None: ...
+
+    async def fire_event(self, event_type: str, data: dict[str, Any]) -> None: ...
 
     def add_state_listener(self, listener: StateListener) -> None: ...
 

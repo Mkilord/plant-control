@@ -32,6 +32,8 @@ class FakeGateway:
         self.offline = False
         self.state_listeners: list[StateListener] = []
         self.connect_listeners: list[ConnectListener] = []
+        self.notifications: list[dict[str, Any]] = []
+        self.events: list[tuple[str, dict[str, Any]]] = []
 
     async def get_states(self) -> list[EntityState]:
         if self.offline:
@@ -42,6 +44,16 @@ class FakeGateway:
         if self.offline:
             raise HomeAssistantUnavailableError("offline")
         self.calls.append((domain, service, entity_id))
+
+    async def call_service_data(self, domain: str, service: str, data: dict[str, Any]) -> None:
+        if self.offline:
+            raise HomeAssistantUnavailableError("offline")
+        self.notifications.append({"service": f"{domain}.{service}", **data})
+
+    async def fire_event(self, event_type: str, data: dict[str, Any]) -> None:
+        if self.offline:
+            raise HomeAssistantUnavailableError("offline")
+        self.events.append((event_type, data))
 
     def add_state_listener(self, listener: StateListener) -> None:
         self.state_listeners.append(listener)

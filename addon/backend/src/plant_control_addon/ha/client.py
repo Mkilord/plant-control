@@ -133,6 +133,21 @@ class HomeAssistantClient:
             }
         )
 
+    async def call_service_data(self, domain: str, service: str, data: dict[str, Any]) -> None:
+        """Сервис с данными и без цели: так вызываются notify.* и уведомления HA."""
+        await self._command(
+            {
+                "type": "call_service",
+                "domain": domain,
+                "service": service,
+                "service_data": data,
+            }
+        )
+
+    async def fire_event(self, event_type: str, data: dict[str, Any]) -> None:
+        """Событие на шине HA: из него автоматизации делают что угодно."""
+        await self._command({"type": "fire_event", "event_type": event_type, "event_data": data})
+
     def add_state_listener(self, listener: StateListener) -> None:
         self._listeners.append(listener)
 

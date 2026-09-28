@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from plant_control.application.health import HealthService
 from plant_control.domain.machine import WateringMachine
-from plant_control.domain.problems import Observation, ProblemBoard, ProblemKind
+from plant_control.domain.problems import Observation, Problem, ProblemBoard, ProblemKind
 from tests.application.builders import collector_machine, simple_machine
 from tests.application.fakes import FakeClock
 
@@ -24,8 +24,8 @@ def service(*machines: WateringMachine, clock: FakeClock | None = None) -> Healt
     return HealthService(Directory(*machines), ProblemBoard(), clock or FakeClock(T0))
 
 
-def kinds(observations: list[Observation] | list[object]) -> list[ProblemKind]:
-    return [getattr(item, "kind") for item in observations]  # noqa: B009
+def kinds(items: Sequence[Observation] | Sequence[Problem]) -> list[ProblemKind]:
+    return [item.kind for item in items]
 
 
 def test_healthy_machine_has_no_problems() -> None:

@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from plant_control.application.health import HealthReport, HealthService
+from plant_control.application.notifications import Event, NotificationService
 from plant_control.application.ports import Clock, Sleeper
 from plant_control.application.safety_service import SafetyService
 from plant_control.application.watering_service import WateringService, WateringTimings
@@ -48,9 +49,11 @@ class Controller:
         sleeper: Sleeper | None = None,
         health: HealthService | None = None,
         health_source: HaHealthSource | None = None,
+        notifications: NotificationService | None = None,
     ) -> None:
         self._registry = registry
         self._health = health
+        self._notifications = notifications
         self._health_source = health_source
         self._ha = ha
         self._clock: Clock = clock or SystemClock()
@@ -97,24 +100,56 @@ class Controller:
 
     async def _run_watering(self, entry: MachineEntry, route_id: str, dose_ml: float) -> None:
         started = self._clock.now()
-        error: str | None = None
         try:
             await self._watering(entry).water(entry.id, route_id, dose_ml)
         except asyncio.CancelledError:
-            error = "cancelled"
+            # Отмена: результат записываем, уведомление не отправляем -
+            # в отменённой задаче любое ожидание сразу прерывается.
+            self._record(entry, route_id, dose_ml, started, "cancelled")
             raise
         except Exception as exc:
             log.exception("watering %s/%s failed", entry.id, route_id)
-            error = f"{type(exc).__name__}: {exc}"
-        finally:
-            entry.last_watering = WateringResult(
-                route_id=route_id,
-                dose_ml=dose_ml,
-                started_at=started,
-                finished_at=self._clock.now(),
-                ok=error is None,
-                error=error,
+            self._record(entry, route_id, dose_ml, started, f"{type(exc).__name__}: {exc}")
+        else:
+            self._record(entry, route_id, dose_ml, started, None)
+        await self._notify_watering(entry, route_id, dose_ml)
+
+    def _record(
+        self,
+        entry: MachineEntry,
+        route_id: str,
+        dose_ml: float,
+        started: datetime,
+        error: str | None,
+    ) -> None:
+        entry.last_watering = WateringResult(
+            route_id=route_id,
+            dose_ml=dose_ml,
+            started_at=started,
+            finished_at=self._clock.now(),
+            ok=error is None,
+            error=error,
+        )
+
+    async def _notify_watering(self, entry: MachineEntry, route_id: str, dose_ml: float) -> None:
+        if self._notifications is None:
+            return
+        result = entry.last_watering
+        name = entry.config.name
+        plant = self._plant_name(entry, route_id)
+        if result is not None and not result.ok:
+            event = self._notifications.watering_failed(
+                entry.id, name, plant, dose_ml, result.error or ""
             )
+        else:
+            event = self._notifications.watering_done(entry.id, name, plant, dose_ml)
+        await self._notifications.emit(event)
+
+    def _plant_name(self, entry: MachineEntry, route_id: str) -> str:
+        for route in entry.config.routes:
+            if route.id == route_id:
+                return route.name or route.id
+        return route_id
 
     async def emergency_stop(self, machine_id: str) -> list[Exception]:
         entry = self._registry.entry(machine_id)
@@ -170,7 +205,26 @@ class Controller:
             )
         for problem in report.closed:
             log.info("problem closed: %s %s", problem.machine_id, problem.kind)
+        await self._notify_problems(report)
         return report
+
+    async def _notify_problems(self, report: HealthReport) -> None:
+        if self._notifications is None:
+            return
+        events: list[Event] = []
+        for problem in report.opened:
+            name = self._machine_name(problem.machine_id)
+            events.append(self._notifications.problem_opened(problem.machine_id, name, problem))
+        for problem in report.closed:
+            name = self._machine_name(problem.machine_id)
+            events.append(self._notifications.problem_closed(problem.machine_id, name, problem))
+        await self._notifications.emit_all(events)
+
+    def _machine_name(self, machine_id: str) -> str:
+        try:
+            return self._registry.entry(machine_id).config.name
+        except Exception:
+            return machine_id
 
     async def health_loop(self, interval: float = 30.0) -> None:
         while True:

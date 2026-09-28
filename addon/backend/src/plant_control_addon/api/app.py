@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from plant_control.application.health import HealthService
+from plant_control.application.notifications import NotificationService
 from plant_control.application.ports import Sleeper
 from plant_control.domain.problems import ProblemBoard
 from pydantic import BaseModel
@@ -24,6 +25,7 @@ from plant_control_addon.ha.client import HomeAssistantClient
 from plant_control_addon.health_source import HaHealthSource
 from plant_control_addon.mqtt.bridge import MqttBridge
 from plant_control_addon.mqtt.transport import resolve_broker, session_factory
+from plant_control_addon.notifications import HaEventSink, HaNotifier
 from plant_control_addon.registry import MachineRegistry
 from plant_control_addon.settings import Settings
 from plant_control_addon.storage import MachineStore
@@ -68,6 +70,15 @@ def create_app(
         clock = SystemClock()
         board = ProblemBoard()
         health = HealthService(registry, board, clock)
+        # Уведомления человеку и события на шину HA: и то и другое через один сервис.
+        notifications = NotificationService(
+            clock,
+            notifier=HaNotifier(client, settings.notify_service)
+            if settings.notify_enabled
+            else None,
+            sinks=[HaEventSink(client)],
+            rules=settings.notification_rules,
+        )
         controller = Controller(
             registry,
             client,
@@ -75,6 +86,7 @@ def create_app(
             sleeper=sleeper,
             health=health,
             health_source=HaHealthSource(client, registry),
+            notifications=notifications,
         )
         client.add_state_listener(controller.on_state_changed)
         client.add_connect_listener(controller.on_connected)
@@ -90,6 +102,7 @@ def create_app(
             await controller.safe_start_all()
 
         app.state.problems = board
+        app.state.notifications = notifications
         tasks = [
             asyncio.create_task(controller.watchdog(watchdog_interval)),
             asyncio.create_task(controller.health_loop(health_interval)),
