@@ -1,6 +1,9 @@
+import { hasMessage, t } from "./i18n";
+
 // Типы повторяют схемы бэкенда (addon/backend/.../config.py и api/machines.py).
 
 export type Geometry =
+  | { shape: "measured"; volume_ml: number; height_mm: number }
   | { shape: "vertical_cylinder"; diameter_mm: number; height_mm: number }
   | { shape: "horizontal_cylinder"; diameter_mm: number; length_mm: number }
   | { shape: "rectangular"; width_mm: number; depth_mm: number; height_mm: number };
@@ -12,7 +15,7 @@ export type Flow =
 
 export interface ConnectionConfig {
   length_mm: number;
-  inner_radius_mm: number;
+  inner_diameter_mm: number;
 }
 
 export type Plumbing =
@@ -96,24 +99,6 @@ export interface Health {
   machines: number;
 }
 
-// Понятные тексты для ошибок домена. Остальные показываются как есть.
-const ERROR_TEXT: Record<string, string> = {
-  MachineBusyError: "Машина уже поливает",
-  NotEnoughWaterError: "В баке мало воды",
-  TankOverflowError: "Столько не поместится в бак",
-  PumpCoolingDownError: "Насос ещё остывает после прошлого полива",
-  PumpAlreadyRunningError: "Насос уже работает",
-  PumpRuntimeExceededError: "Доза не укладывается в предел работы насоса за один раз",
-  PumpCannotDeliverError: "Насос не поднимет воду на такую высоту",
-  PumpStateUnknownError: "Состояние насоса неизвестно. Нажмите Стоп",
-  CollectorStateUnknownError: "Состояние клапанов неизвестно. Нажмите Стоп",
-  AnotherValveOpenError: "Открыт другой клапан",
-  PumpControlError: "Не удалось переключить реле насоса",
-  ValveControlError: "Не удалось переключить клапан",
-  HomeAssistantUnavailableError: "Нет связи с Home Assistant",
-  UnknownMachineError: "Машина не найдена",
-};
-
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -151,7 +136,8 @@ function toError(status: number, data: unknown): ApiError {
     const record = data as Record<string, unknown>;
     // Ошибка домена: {"error": "NotEnoughWaterError", "detail": "..."}
     if (typeof record.error === "string") {
-      const text = ERROR_TEXT[record.error] ?? String(record.detail ?? record.error);
+      const key = `errors.${record.error}`;
+      const text = hasMessage(key) ? t(key) : String(record.detail ?? record.error);
       return new ApiError(text, status, record.error);
     }
     // Ошибка валидации FastAPI: {"detail": [{"loc": [...], "msg": "..."}]}
@@ -165,7 +151,7 @@ function toError(status: number, data: unknown): ApiError {
       return new ApiError(record.detail, status, null);
     }
   }
-  return new ApiError(`Ошибка ${status}`, status, null);
+  return new ApiError(t("errors.status", { status }), status, null);
 }
 
 export const api = {

@@ -12,12 +12,21 @@
   --water: #4fa9dd;
   --water-soft: #d7ecf8;
   --reserve: #c9ced4;
+  --tip-bg: #1f2937;
+  --tip-text: #f9fafb;
+  --accent-general: #5c6bc0;
+  --accent-tank: #0b84c6;
+  --accent-pump: #8e5bd8;
+  --accent-tube: #00897b;
+  --accent-plant: #43a047;
+  --accent-extra: #8d6e63;
   --radius: 12px;
   color-scheme: light;
 }
 
+/* Тёмная тема: по системе, если тема не выбрана явно, или по выбору пользователя. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #111418;
     --card: #1b1f24;
     --text: #e7e9ec;
@@ -31,8 +40,41 @@
     --water: #3a95c9;
     --water-soft: #16303f;
     --reserve: #3a4049;
+    --tip-bg: #e5e7eb;
+    --tip-text: #111418;
+    --accent-general: #8c9eff;
+    --accent-tank: #4fb3ea;
+    --accent-pump: #b388ff;
+    --accent-tube: #4db6ac;
+    --accent-plant: #81c784;
+    --accent-extra: #bcaaa4;
     color-scheme: dark;
   }
+}
+
+:root[data-theme="dark"] {
+    --bg: #111418;
+    --card: #1b1f24;
+    --text: #e7e9ec;
+    --muted: #9aa1ab;
+    --border: #2c323a;
+    --primary: #3aa6e0;
+    --primary-text: #0b1117;
+    --danger: #ef5350;
+    --ok: #66bb6a;
+    --warn: #ffb74d;
+    --water: #3a95c9;
+    --water-soft: #16303f;
+    --reserve: #3a4049;
+    --tip-bg: #e5e7eb;
+    --tip-text: #111418;
+    --accent-general: #8c9eff;
+    --accent-tank: #4fb3ea;
+    --accent-pump: #b388ff;
+    --accent-tube: #4db6ac;
+    --accent-plant: #81c784;
+    --accent-extra: #bcaaa4;
+    color-scheme: dark;
 }
 
 * {
@@ -181,8 +223,20 @@ label.field > span {
 
 .fields {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 14px 12px;
+  /* Поля выравниваются по низу: подписи разной длины не сдвигают сами поля. */
+  align-items: end;
+}
+
+.fields .wide {
+  grid-column: span 2;
+}
+
+@media (max-width: 480px) {
+  .fields .wide {
+    grid-column: auto;
+  }
 }
 
 fieldset {
@@ -249,4 +303,63 @@ table.kv td {
 table.kv td:last-child {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.hint.block {
+  margin: 0 0 12px;
+}
+
+.num {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.num input {
+  padding-right: 52px;
+}
+
+.num .unit {
+  position: absolute;
+  right: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.note {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent, var(--primary)) 9%, transparent);
+  border-left: 3px solid var(--accent, var(--primary));
+}
+
+.note .icon {
+  color: var(--accent, var(--primary));
+  margin-top: 1px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.icon-button {
+  border: none;
+  background: none;
+  padding: 6px;
+  border-radius: 8px;
+  color: var(--muted);
+}
+
+.icon-button:hover {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
 }

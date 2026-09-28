@@ -1,8 +1,11 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed, ref, watch } from "vue";
 import { api, errorText, type Machine, type Plan } from "../api";
 import { ml, seconds } from "../format";
+import AppIcon from "./AppIcon.vue";
 import ModalDialog from "./ModalDialog.vue";
+import NumField from "./NumField.vue";
 
 const props = defineProps<{ machine: Machine }>();
 const emit = defineEmits<{ close: []; started: [] }>();
@@ -52,41 +55,44 @@ function routeLabel(id: string): string {
 </script>
 
 <template>
-  <ModalDialog :title="`Полить: ${machine.config.name}`" @close="emit('close')">
+  <ModalDialog :title="t('water.title', { name: machine.config.name })" @close="emit('close')">
     <label v-if="routes.length > 1" class="field">
-      <span>Растение</span>
+      <span>{{ t("water.plant") }}</span>
       <select v-model="routeId">
         <option v-for="route in routes" :key="route.id" :value="route.id">
           {{ routeLabel(route.id) }}
         </option>
       </select>
     </label>
-    <label class="field">
-      <span>Доза, мл</span>
-      <input v-model.number="dose" type="number" min="1" step="10" @keyup.enter="calculate" />
-    </label>
+    <NumField v-model="dose" :label="t('water.dose')" :unit="t('unit.ml')" :min="1" />
 
     <table v-if="plan" class="kv">
       <tbody>
         <tr>
-          <td>Время работы насоса</td>
+          <td>{{ t("water.duration") }}</td>
           <td><b>{{ seconds(plan.duration_s) }}</b></td>
         </tr>
         <tr>
-          <td>Насос прокачает</td>
+          <td>{{ t("water.pumped") }}</td>
           <td>{{ ml(plan.pumped_ml) }}</td>
         </tr>
         <tr>
-          <td>Уйдёт из бака</td>
+          <td>{{ t("water.consumed") }}</td>
           <td>{{ ml(plan.consumed_ml) }}</td>
         </tr>
         <tr>
-          <td>Напор в начале / в конце</td>
-          <td>{{ Math.round(plan.head_start_mm) }} / {{ Math.round(plan.head_end_mm) }} мм</td>
+          <td>{{ t("water.head") }}</td>
+          <td>
+            {{ Math.round(plan.head_start_mm) }} / {{ Math.round(plan.head_end_mm) }}
+            {{ t("unit.mm") }}
+          </td>
         </tr>
         <tr>
-          <td>Расход в начале / в конце</td>
-          <td>{{ plan.flow_start_ml_s.toFixed(1) }} / {{ plan.flow_end_ml_s.toFixed(1) }} мл/с</td>
+          <td>{{ t("water.flow") }}</td>
+          <td>
+            {{ plan.flow_start_ml_s.toFixed(1) }} / {{ plan.flow_end_ml_s.toFixed(1) }}
+            {{ t("unit.ml_s") }}
+          </td>
         </tr>
       </tbody>
     </table>
@@ -94,8 +100,12 @@ function routeLabel(id: string): string {
     <div v-if="error" class="error">{{ error }}</div>
 
     <div class="row">
-      <button :disabled="busy || dose <= 0" @click="calculate">Рассчитать</button>
-      <button class="primary" :disabled="busy || dose <= 0" @click="water">Полить</button>
+      <button :disabled="busy || dose <= 0" @click="calculate">
+        <AppIcon name="calculator" />{{ t("water.calculate") }}
+      </button>
+      <button class="primary" :disabled="busy || dose <= 0" @click="water">
+        <AppIcon name="droplet" />{{ t("water.start") }}
+      </button>
     </div>
   </ModalDialog>
 </template>

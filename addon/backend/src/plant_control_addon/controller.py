@@ -12,6 +12,7 @@ from collections.abc import Coroutine
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from plant_control.application.health import HealthReport, HealthService
 from plant_control.application.ports import Clock, Sleeper
 from plant_control.application.safety_service import SafetyService
 from plant_control.application.watering_service import WateringService, WateringTimings
@@ -21,6 +22,7 @@ from plant_control.domain.watering import WateringPlan
 
 from plant_control_addon.ha.client import EntityState
 from plant_control_addon.ha.devices import HaPumpControl, HaValveControl, ServiceCaller
+from plant_control_addon.health_source import HaHealthSource
 from plant_control_addon.registry import MachineEntry, MachineRegistry, WateringResult
 
 log = logging.getLogger(__name__)
@@ -44,12 +46,19 @@ class Controller:
         *,
         clock: Clock | None = None,
         sleeper: Sleeper | None = None,
+        health: HealthService | None = None,
+        health_source: HaHealthSource | None = None,
     ) -> None:
         self._registry = registry
+        self._health = health
+        self._health_source = health_source
         self._ha = ha
         self._clock: Clock = clock or SystemClock()
         self._sleeper: Sleeper = sleeper or AsyncioSleeper()
         self._background: set[asyncio.Task[Any]] = set()
+
+    def now(self) -> datetime:
+        return self._clock.now()
 
     # --- Сервисы ядра для конкретной машины ---
 
@@ -146,6 +155,30 @@ class Controller:
         for entry in self._registry.entries():
             if entry.task is not None and not entry.task.done():
                 await self.emergency_stop(entry.id)
+
+    # --- Проверка состояния ---
+
+    async def check_health(self) -> HealthReport | None:
+        """Снять срез состояния и обновить доску проблем."""
+        if self._health is None:
+            return None
+        extra = await self._health_source.observations() if self._health_source else []
+        report = self._health.check(extra)
+        for problem in report.opened:
+            log.warning(
+                "problem opened: %s %s %s", problem.machine_id, problem.kind, problem.details
+            )
+        for problem in report.closed:
+            log.info("problem closed: %s %s", problem.machine_id, problem.kind)
+        return report
+
+    async def health_loop(self, interval: float = 30.0) -> None:
+        while True:
+            try:
+                await self.check_health()
+            except Exception:
+                log.exception("health check failed")
+            await asyncio.sleep(interval)
 
     # --- Фоновые задачи ---
 

@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from plant_control_addon.api.app import create_app
+from plant_control_addon.ha.client import EntityState
 from tests.conftest import FakeGateway, running
 
 # Простая поливалка: бак 2 л (цилиндр 130 x 151 мм), 500 мл запаса,
@@ -29,7 +30,7 @@ SIMPLE: dict[str, Any] = {
     "routes": [
         {
             "id": "main",
-            "connection": {"length_mm": 700, "inner_radius_mm": 2},
+            "connection": {"length_mm": 700, "inner_diameter_mm": 4},
             "outlet_height_mm": 300,
         },
     ],
@@ -38,18 +39,18 @@ SIMPLE: dict[str, Any] = {
 COLLECTOR: dict[str, Any] = {
     **SIMPLE,
     "name": "Коллектор",
-    "plumbing": {"type": "collector", "supply": {"length_mm": 500, "inner_radius_mm": 2}},
+    "plumbing": {"type": "collector", "supply": {"length_mm": 500, "inner_diameter_mm": 4}},
     "routes": [
         {
             "id": "v1",
             "valve_entity_id": "input_boolean.valve_1",
-            "connection": {"length_mm": 300, "inner_radius_mm": 2},
+            "connection": {"length_mm": 300, "inner_diameter_mm": 4},
             "outlet_height_mm": 300,
         },
         {
             "id": "v2",
             "valve_entity_id": "input_boolean.valve_2",
-            "connection": {"length_mm": 300, "inner_radius_mm": 2},
+            "connection": {"length_mm": 300, "inner_diameter_mm": 4},
             "outlet_height_mm": 300,
         },
     ],
@@ -288,3 +289,110 @@ async def test_watchdog_stops_pump_left_on(api: httpx.AsyncClient, gateway: Fake
     assert gateway.commands() == ["turn_off switch.pump_1"]
     body = (await api.get(f"/api/machines/{machine_id}")).json()
     assert body["status"]["pump"]["state"] == "off"
+
+
+async def test_measured_tank(api: httpx.AsyncClient) -> None:
+    config = copy.deepcopy(SIMPLE)
+    config["tank"] = {
+        "geometry": {"shape": "measured", "volume_ml": 1800, "height_mm": 150},
+        "reserve_ml": 500,
+    }
+    body = await create(api, config)
+    tank = body["status"]["tank"]
+    assert tank["capacity_ml"] == pytest.approx(1800)
+    assert tank["usable_ml"] == pytest.approx(1300)
+
+
+async def test_old_radius_config_is_converted(api: httpx.AsyncClient) -> None:
+    config = copy.deepcopy(SIMPLE)
+    config["routes"][0]["connection"] = {"length_mm": 700, "inner_radius_mm": 2}
+    body = await create(api, config)
+    assert body["config"]["routes"][0]["connection"]["inner_diameter_mm"] == 4
+
+
+# --- Проблемы ---
+
+
+async def test_problem_appears_when_pump_entity_is_missing(
+    api: httpx.AsyncClient, gateway: FakeGateway
+) -> None:
+    config = copy.deepcopy(SIMPLE)
+    config["pump"]["entity_id"] = "switch.no_such_pump"
+    machine_id = (await create(api, config))["id"]
+
+    problems = (await api.post("/api/problems/check")).json()
+
+    assert [p["kind"] for p in problems] == ["pump_entity_missing"]
+    assert problems[0]["machine_id"] == machine_id
+    assert problems[0]["blocking"] is True
+
+
+async def test_problem_closes_when_entity_appears(
+    api: httpx.AsyncClient, gateway: FakeGateway
+) -> None:
+    config = copy.deepcopy(SIMPLE)
+    config["pump"]["entity_id"] = "switch.no_such_pump"
+    await create(api, config)
+    await api.post("/api/problems/check")
+
+    gateway.states.append(EntityState("switch.no_such_pump", "off", "Pump"))
+    problems = (await api.post("/api/problems/check")).json()
+
+    assert problems == []
+
+
+async def test_unavailable_entity_is_a_problem(
+    api: httpx.AsyncClient, gateway: FakeGateway
+) -> None:
+    await create(api, SIMPLE)
+    gateway.states = [EntityState("switch.pump_1", "unavailable", "Pump 1")]
+
+    problems = (await api.post("/api/problems/check")).json()
+
+    assert [p["kind"] for p in problems] == ["pump_entity_missing"]
+
+
+async def test_no_connection_to_ha_is_a_problem(
+    api: httpx.AsyncClient, gateway: FakeGateway
+) -> None:
+    await create(api, SIMPLE)
+    gateway.is_connected = False
+
+    problems = (await api.post("/api/problems/check")).json()
+
+    assert [p["kind"] for p in problems] == ["ha_disconnected"]
+
+
+async def test_low_water_problem_and_refill(api: httpx.AsyncClient) -> None:
+    machine_id = (await create(api, SIMPLE))["id"]
+    await api.put(f"/api/machines/{machine_id}/tank/volume", json={"volume_ml": 550})
+
+    problems = (await api.post("/api/problems/check")).json()
+    assert [p["kind"] for p in problems] == ["tank_low"]
+    assert problems[0]["blocking"] is False
+
+    await api.post(f"/api/machines/{machine_id}/tank/refill", json={})
+    assert (await api.post("/api/problems/check")).json() == []
+
+
+async def test_acknowledge_and_mute(api: httpx.AsyncClient, gateway: FakeGateway) -> None:
+    await create(api, SIMPLE)
+    gateway.is_connected = False
+    problem = (await api.post("/api/problems/check")).json()[0]
+
+    acked = (await api.post(f"/api/problems/{problem['id']}/ack")).json()
+    assert acked["acknowledged"] is True
+
+    muted = (await api.post(f"/api/problems/{problem['id']}/mute", json={"hours": 2})).json()
+    assert muted["muted_until"] is not None
+
+    unmuted = (await api.post(f"/api/problems/{problem['id']}/unmute")).json()
+    assert unmuted["muted_until"] is None
+
+    listed = (await api.get("/api/problems")).json()
+    assert len(listed) == 1
+
+
+async def test_unknown_problem_is_404(api: httpx.AsyncClient) -> None:
+    assert (await api.post("/api/problems/m-1|tank_low|/ack")).status_code == 404
+    assert (await api.post("/api/problems/garbage/ack")).status_code == 404

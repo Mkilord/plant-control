@@ -146,6 +146,33 @@ class RectangularTank:
         return volume * MM3_PER_ML / (self.width_mm * self.depth_mm)
 
 
+@dataclass(frozen=True, slots=True)
+class MeasuredTank:
+    """Бак по замеру: объём воды до линии налива и высота воды при этом объёме.
+
+    Форма не нужна. Бак считается "эквивалентным цилиндром" со средней площадью
+    volume / height, поэтому неровные стенки (банка, ведро с конусом) уже учтены
+    замером, а пустое место над линией налива в расчёт не входит.
+    """
+
+    volume_ml: float
+    height_mm: float
+
+    def __post_init__(self) -> None:
+        _require_positive(volume_ml=self.volume_ml, height_mm=self.height_mm)
+
+    def capacity_ml(self) -> float:
+        return self.volume_ml
+
+    def volume_at_level(self, level_mm: float) -> float:
+        level = _clamp(level_mm, 0.0, self.height_mm)
+        return self.volume_ml * level / self.height_mm
+
+    def level_at_volume(self, volume_ml: float) -> float:
+        volume = _clamp(volume_ml, 0.0, self.volume_ml)
+        return self.height_mm * volume / self.volume_ml
+
+
 class Tank:
     """Бак: форма, сколько в нём воды и с какой высоты забирает насос.
 

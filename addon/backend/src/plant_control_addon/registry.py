@@ -87,6 +87,10 @@ class MachineRegistry:
     def entries(self) -> list[MachineEntry]:
         return list(self._entries.values())
 
+    def machines(self) -> list[WateringMachine]:
+        """Порт MachineDirectory для проверки состояния."""
+        return [entry.machine for entry in self._entries.values()]
+
     def entry(self, machine_id: str) -> MachineEntry:
         try:
             return self._entries[machine_id]

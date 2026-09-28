@@ -111,3 +111,29 @@ class UnknownRouteError(MachineError):
 
 class MachineBusyError(MachineError):
     pass
+
+
+# --- Расписание ---
+
+
+class ScheduleError(Exception):
+    pass
+
+
+class InvalidScheduleError(ScheduleError):
+    pass
+
+
+# --- Питание и очередь ---
+
+
+class PowerError(Exception):
+    pass
+
+
+class InvalidPowerGroupError(PowerError):
+    pass
+
+
+class UnknownRequestError(PowerError):
+    pass

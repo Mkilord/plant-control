@@ -2,6 +2,8 @@
 import { computed, ref } from "vue";
 import { api, errorText, type Machine } from "../api";
 import { ml, time } from "../format";
+import { t } from "../i18n";
+import AppIcon from "./AppIcon.vue";
 import TankDialog from "./TankDialog.vue";
 import TankGauge from "./TankGauge.vue";
 import WaterDialog from "./WaterDialog.vue";
@@ -14,19 +16,32 @@ const showTank = ref(false);
 const error = ref("");
 
 const status = computed(() => props.machine.status);
+const hasCollector = computed(() => props.machine.config.plumbing.type === "collector");
+
+// Растения машины. У машины с коллектором рядом состояние клапана.
+const plants = computed(() =>
+  props.machine.config.routes.map((route) => ({
+    id: route.id,
+    name: route.name || route.id,
+    valve: status.value.valves[route.id],
+  })),
+);
+
+const plantTitle = computed(() => {
+  const named = props.machine.config.routes.map((r) => r.name).filter(Boolean);
+  return named.length ? named.join(", ") : t("card.no_plant");
+});
 
 const pumpChip = computed(() => {
   switch (status.value.pump.state) {
     case "on":
-      return { text: "насос работает", cls: "on" };
+      return { text: t("card.pump_on"), cls: "on" };
     case "unknown":
-      return { text: "насос: неизвестно", cls: "danger" };
+      return { text: t("card.pump_unknown"), cls: "danger" };
     default:
-      return { text: "насос выключен", cls: "" };
+      return { text: t("card.pump_off"), cls: "" };
   }
 });
-
-const valveList = computed(() => Object.entries(status.value.valves));
 
 async function stop() {
   error.value = "";
@@ -41,42 +56,71 @@ async function stop() {
 </script>
 
 <template>
-  <div class="card machine">
-    <div class="row head">
-      <h2>{{ machine.config.name }}</h2>
-      <span v-if="status.busy" class="chip on">поливает</span>
-      <span class="chip" :class="pumpChip.cls">{{ pumpChip.text }}</span>
+  <article class="card machine" :class="{ busy: status.busy }">
+    <header class="head">
+      <span class="badge"><AppIcon name="plant" :size="22" /></span>
+      <div class="titles">
+        <h2>{{ machine.config.name }}</h2>
+        <p class="plant" :title="plantTitle">
+          <AppIcon :name="hasCollector ? 'collector' : 'tube'" :size="14" />
+          {{ hasCollector ? t("type.collector") : plantTitle }}
+        </p>
+      </div>
+      <RouterLink
+        class="icon-button"
+        :to="`/machines/${machine.id}`"
+        :title="t('card.settings')"
+        :aria-label="t('card.settings')"
+      >
+        <AppIcon name="edit" :size="19" />
+      </RouterLink>
+    </header>
+
+    <div class="chips">
+      <span v-if="status.busy" class="chip on pulse">
+        <AppIcon name="droplet" :size="12" /> {{ t("card.watering") }}
+      </span>
+      <span class="chip" :class="pumpChip.cls">
+        <AppIcon name="pump" :size="12" /> {{ pumpChip.text }}
+      </span>
     </div>
 
     <TankGauge :tank="status.tank" />
 
-    <div v-if="valveList.length" class="row small">
-      <span class="muted">Клапаны:</span>
-      <span
-        v-for="[id, state] in valveList"
-        :key="id"
-        class="chip"
-        :class="{ on: state === 'open', danger: state === 'unknown' }"
-      >
-        {{ id }}
-      </span>
-    </div>
+    <ul v-if="hasCollector" class="plants">
+      <li v-for="plant in plants" :key="plant.id">
+        <AppIcon name="plant" :size="14" />
+        <span class="plant-name">{{ plant.name }}</span>
+        <span
+          class="dot"
+          :class="{ open: plant.valve === 'open', unknown: plant.valve === 'unknown' }"
+          :title="plant.valve"
+        />
+      </li>
+    </ul>
 
-    <div v-if="status.last_watering" class="small">
-      <span class="muted">Последний полив:</span>
+    <p v-if="status.last_watering" class="last small">
+      <AppIcon name="clock" :size="14" />
+      <span class="muted">{{ t("card.last") }}</span>
       {{ time(status.last_watering.started_at) }}, {{ ml(status.last_watering.dose_ml) }}
-      <span v-if="status.last_watering.ok" class="chip on">ok</span>
-      <span v-else class="chip danger" :title="status.last_watering.error ?? ''">ошибка</span>
-    </div>
+      <span v-if="status.last_watering.ok" class="chip on">{{ t("card.ok") }}</span>
+      <span v-else class="chip danger" :title="status.last_watering.error ?? ''">
+        {{ t("card.error") }}
+      </span>
+    </p>
 
     <div v-if="error" class="error">{{ error }}</div>
 
-    <div class="row actions">
-      <button class="primary" :disabled="status.busy" @click="showWater = true">Полить</button>
-      <button @click="showTank = true">Бак</button>
-      <RouterLink class="button" :to="`/machines/${machine.id}`">Настроить</RouterLink>
-      <button class="danger" :class="{ solid: status.busy }" @click="stop">Стоп</button>
-    </div>
+    <footer class="actions">
+      <button class="primary" :disabled="status.busy" @click="showWater = true">
+        <AppIcon name="droplet" />{{ t("card.water") }}
+      </button>
+      <button @click="showTank = true"><AppIcon name="refill" />{{ t("card.tank") }}</button>
+      <span class="spacer" />
+      <button class="danger" :class="{ solid: status.busy }" @click="stop">
+        <AppIcon name="stop" :size="16" />{{ t("card.stop") }}
+      </button>
+    </footer>
 
     <WaterDialog
       v-if="showWater"
@@ -90,7 +134,7 @@ async function stop() {
       @close="showTank = false"
       @changed="emit('changed')"
     />
-  </div>
+  </article>
 </template>
 
 <style scoped>
@@ -98,13 +142,128 @@ async function stop() {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  border-top: 3px solid var(--accent-plant);
+  transition: box-shadow 0.2s;
 }
 
-.head h2 {
+.machine.busy {
+  border-top-color: var(--primary);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent);
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  color: var(--accent-plant);
+  background: color-mix(in srgb, var(--accent-plant) 14%, transparent);
+  flex: none;
+}
+
+.titles {
+  flex: 1;
+  min-width: 0;
+}
+
+.plant {
+  margin: 2px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pulse {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.plants {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+}
+
+.plants li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.plant-name {
+  color: var(--text);
   flex: 1;
 }
 
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--reserve);
+}
+
+.dot.open {
+  background: var(--ok);
+}
+
+.dot.unknown {
+  background: var(--danger);
+}
+
+.last {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0;
+  color: var(--muted);
+}
+
 .actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
   margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.spacer {
+  flex: 1;
 }
 </style>

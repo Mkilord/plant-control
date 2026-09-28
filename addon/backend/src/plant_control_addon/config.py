@@ -9,7 +9,7 @@ state_of снимает состояние обратно для сохране�
 """
 
 from datetime import datetime, timedelta
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from plant_control.domain.collector import Collector, Valve, ValveState
 from plant_control.domain.connection import Connection, Outlet, Route
@@ -18,6 +18,7 @@ from plant_control.domain.machine import WateringMachine
 from plant_control.domain.pump import Pump, PumpPassport, PumpState
 from plant_control.domain.tank import (
     HorizontalCylinder,
+    MeasuredTank,
     RectangularTank,
     Tank,
     TankGeometry,
@@ -65,8 +66,16 @@ class RectangularTankConfig(BaseModel):
     height_mm: float = Field(gt=0)
 
 
+class MeasuredTankConfig(BaseModel):
+    """Бак по замеру: объём до линии налива и высота воды при нём."""
+
+    shape: Literal["measured"] = "measured"
+    volume_ml: float = Field(gt=0)
+    height_mm: float = Field(gt=0)
+
+
 GeometryConfig = Annotated[
-    VerticalCylinderConfig | HorizontalCylinderConfig | RectangularTankConfig,
+    MeasuredTankConfig | VerticalCylinderConfig | HorizontalCylinderConfig | RectangularTankConfig,
     Field(discriminator="shape"),
 ]
 
@@ -115,7 +124,17 @@ class PumpConfig(BaseModel):
 
 class ConnectionConfig(BaseModel):
     length_mm: float = Field(ge=0)
-    inner_radius_mm: float = Field(gt=0)
+    inner_diameter_mm: float = Field(gt=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def radius_to_diameter(cls, data: Any) -> Any:
+        # Старые записи хранили радиус. Переводим, чтобы не терять сохранённые машины.
+        old = isinstance(data, dict) and "inner_radius_mm" in data
+        if old and "inner_diameter_mm" not in data:
+            data = {**data, "inner_diameter_mm": data["inner_radius_mm"] * 2}
+            del data["inner_radius_mm"]
+        return data
 
 
 class DirectPlumbingConfig(BaseModel):
@@ -207,6 +226,8 @@ class MachineState(BaseModel):
 
 def _geometry(cfg: GeometryConfig) -> TankGeometry:
     match cfg:
+        case MeasuredTankConfig():
+            return MeasuredTank(cfg.volume_ml, cfg.height_mm)
         case VerticalCylinderConfig():
             return VerticalCylinder(cfg.diameter_mm, cfg.height_mm)
         case HorizontalCylinderConfig():
@@ -234,7 +255,7 @@ def _plumbing(cfg: PlumbingConfig) -> Plumbing:
 
 
 def _connection(cfg: ConnectionConfig) -> Connection:
-    return Connection(cfg.length_mm, cfg.inner_radius_mm)
+    return Connection(cfg.length_mm, cfg.inner_diameter_mm / 2)
 
 
 def _head_model(name: str) -> HeadModel:

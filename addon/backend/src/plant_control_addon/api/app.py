@@ -8,15 +8,19 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from plant_control.application.health import HealthService
 from plant_control.application.ports import Sleeper
+from plant_control.domain.problems import ProblemBoard
 from pydantic import BaseModel
 
 from plant_control_addon.api.errors import install_error_handlers
 from plant_control_addon.api.ha_routes import HaGateway
 from plant_control_addon.api.ha_routes import router as ha_router
 from plant_control_addon.api.machines import router as machines_router
-from plant_control_addon.controller import Controller
+from plant_control_addon.api.problems import router as problems_router
+from plant_control_addon.controller import Controller, SystemClock
 from plant_control_addon.ha.client import HomeAssistantClient
+from plant_control_addon.health_source import HaHealthSource
 from plant_control_addon.registry import MachineRegistry
 from plant_control_addon.settings import Settings
 from plant_control_addon.storage import MachineStore
@@ -37,6 +41,7 @@ def create_app(
     data_dir: Path | None = None,
     sleeper: Sleeper | None = None,
     watchdog_interval: float = 1.0,
+    health_interval: float = 30.0,
 ) -> FastAPI:
     """ha, data_dir и sleeper подменяют тесты. Без них всё берётся из настроек."""
 
@@ -54,7 +59,17 @@ def create_app(
 
         registry = MachineRegistry(MachineStore((data_dir or settings.data_dir) / DB_NAME))
         await registry.load()
-        controller = Controller(registry, client, sleeper=sleeper)
+        clock = SystemClock()
+        board = ProblemBoard()
+        health = HealthService(registry, board, clock)
+        controller = Controller(
+            registry,
+            client,
+            clock=clock,
+            sleeper=sleeper,
+            health=health,
+            health_source=HaHealthSource(client, registry),
+        )
         client.add_state_listener(controller.on_state_changed)
         client.add_connect_listener(controller.on_connected)
 
@@ -68,13 +83,16 @@ def create_app(
         elif client.is_connected:
             await controller.safe_start_all()
 
+        app.state.problems = board
         watchdog = asyncio.create_task(controller.watchdog(watchdog_interval))
+        health_task = asyncio.create_task(controller.health_loop(health_interval))
         try:
             yield
         finally:
-            watchdog.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await watchdog
+            for task in (watchdog, health_task):
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
             await controller.shutdown()
             if real_client is not None:
                 await real_client.stop()
@@ -83,6 +101,7 @@ def create_app(
     install_error_handlers(app)
     app.include_router(ha_router)
     app.include_router(machines_router)
+    app.include_router(problems_router)
 
     @app.get("/api/health", tags=["service"])
     async def health() -> Health:

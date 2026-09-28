@@ -11,6 +11,7 @@ from plant_control.domain.errors import (
 )
 from plant_control.domain.tank import (
     HorizontalCylinder,
+    MeasuredTank,
     RectangularTank,
     Tank,
     VerticalCylinder,
@@ -130,3 +131,27 @@ def test_set_measured_volume(geometry: VerticalCylinder) -> None:
 def test_measured_volume_over_capacity_is_rejected(geometry: VerticalCylinder) -> None:
     with pytest.raises(InvalidTankError):
         Tank(geometry, volume_ml=1500).set_measured_volume(5000)
+
+
+# --- Бак по замеру ---
+
+
+def test_measured_tank_capacity_is_measured_volume() -> None:
+    assert MeasuredTank(volume_ml=1800, height_mm=150).capacity_ml() == 1800
+
+
+def test_measured_tank_level_is_proportional_to_volume() -> None:
+    geometry = MeasuredTank(volume_ml=1800, height_mm=150)
+    assert geometry.level_at_volume(600) == pytest.approx(50)
+    assert geometry.volume_at_level(100) == pytest.approx(1200)
+
+
+def test_measured_tank_reserve_in_ml() -> None:
+    tank = Tank.with_reserve(MeasuredTank(volume_ml=2000, height_mm=160), reserve_ml=500)
+    assert tank.usable_volume_ml == pytest.approx(1500)
+    assert tank.intake_height_mm == pytest.approx(40)
+
+
+def test_measured_tank_rejects_zero() -> None:
+    with pytest.raises(InvalidTankError):
+        MeasuredTank(volume_ml=0, height_mm=150)

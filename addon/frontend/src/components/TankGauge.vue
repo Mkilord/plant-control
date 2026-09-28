@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from "../i18n";
 import { computed } from "vue";
 import type { MachineStatus } from "../api";
 import { ml } from "../format";
@@ -14,16 +15,18 @@ const low = computed(() => props.tank.usable_ml < props.tank.capacity_ml * 0.15)
 </script>
 
 <template>
-  <div class="gauge" :title="`Уровень ${Math.round(tank.level_mm)} мм`">
+  <div class="gauge" :title="t('gauge.level', { level: Math.round(tank.level_mm) })">
     <div class="bar">
       <div class="water" :class="{ low }" :style="{ width: waterPercent + '%' }" />
       <div class="reserve" :style="{ width: reservePercent + '%' }" />
     </div>
     <div class="row small">
       <span>
-        Доступно <b>{{ ml(tank.usable_ml) }}</b>
+        {{ t("gauge.available") }} <b>{{ ml(tank.usable_ml) }}</b>
       </span>
-      <span class="muted">из {{ ml(tank.capacity_ml) }}, запас {{ ml(tank.reserve_ml) }}</span>
+      <span class="muted">{{
+        t("gauge.of", { capacity: ml(tank.capacity_ml), reserve: ml(tank.reserve_ml) })
+      }}</span>
     </div>
   </div>
 </template>

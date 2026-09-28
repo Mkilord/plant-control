@@ -8,7 +8,7 @@ const emit = defineEmits<{ close: [] }>();
     <div class="dialog card" role="dialog" :aria-label="title">
       <div class="row head">
         <h2>{{ title }}</h2>
-        <button class="close" aria-label="Закрыть" @click="emit('close')">×</button>
+        <button class="close" aria-label="Close" @click="emit('close')">×</button>
       </div>
       <slot />
     </div>
