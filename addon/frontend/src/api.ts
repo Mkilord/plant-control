@@ -22,6 +22,19 @@ export type Plumbing =
   | { type: "direct"; back_to_tank_fraction: number }
   | { type: "collector"; supply: ConnectionConfig };
 
+export type Rule =
+  | { type: "weekly"; days: number[]; times: string[] }
+  | { type: "interval"; every_days: number; times: string[]; start_date: string | null };
+
+export interface ScheduleConfig {
+  enabled: boolean;
+  rule: Rule;
+  dose_ml: number | null;
+  season_factor: number;
+  catch_up_h: number;
+  min_gap_h: number;
+}
+
 export interface RouteConfig {
   id: string;
   name: string;
@@ -29,6 +42,8 @@ export interface RouteConfig {
   connection: ConnectionConfig;
   outlet_height_mm: number;
   correction: number;
+  default_dose_ml: number;
+  schedule: ScheduleConfig | null;
 }
 
 export type HeadModel = "start" | "mid" | "stepwise";
@@ -41,6 +56,9 @@ export interface MachineConfig {
   head_model: HeadModel;
   routes: RouteConfig[];
   timings: { valve_lead_s: number; valve_lag_s: number };
+  power_group: string;
+  power_limit: number;
+  power_gap_s: number;
 }
 
 export interface WateringResult {
@@ -65,6 +83,61 @@ export interface MachineStatus {
   valves: Record<string, "open" | "closed" | "unknown">;
   supply_is_filled: boolean;
   last_watering: WateringResult | null;
+  schedules: ScheduleStatus[];
+  queue: QueueItem[];
+}
+
+export interface ScheduleStatus {
+  route_id: string;
+  enabled: boolean;
+  dose_ml: number;
+  next_run_at: string | null;
+  last_run_at: string | null;
+}
+
+export interface QueueItem {
+  id: string;
+  machine_id: string;
+  route_id: string;
+  dose_ml: number;
+  source: "manual" | "schedule";
+  state: "queued" | "running" | "done" | "failed" | "cancelled" | "expired";
+  requested_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  position: number | null;
+}
+
+export interface QueueView {
+  running: QueueItem[];
+  queued: QueueItem[];
+  history: QueueItem[];
+}
+
+export interface Schedule {
+  id: string;
+  machine_id: string;
+  machine_name: string;
+  route_id: string;
+  enabled: boolean;
+  dose_ml: number;
+  next_run_at: string | null;
+  last_run_at: string | null;
+}
+
+export interface Problem {
+  id: string;
+  machine_id: string;
+  kind: string;
+  target: string;
+  severity: "info" | "warning" | "error";
+  blocking: boolean;
+  details: string;
+  opened_at: string;
+  last_seen_at: string;
+  acknowledged: boolean;
+  muted_until: string | null;
 }
 
 export interface Machine {
@@ -166,12 +239,44 @@ export const api = {
   plan: (id: string, routeId: string, doseMl: number) =>
     request<Plan>("POST", `api/machines/${id}/plan`, { route_id: routeId, dose_ml: doseMl }),
   water: (id: string, routeId: string, doseMl: number) =>
-    request<Plan>("POST", `api/machines/${id}/water`, { route_id: routeId, dose_ml: doseMl }),
+    request<{ plan: Plan; request: QueueItem }>("POST", `api/machines/${id}/water`, {
+      route_id: routeId,
+      dose_ml: doseMl,
+    }),
   stop: (id: string) => request<{ errors: string[] }>("POST", `api/machines/${id}/stop`),
   refill: (id: string, volumeMl: number | null) =>
     request<Machine>("POST", `api/machines/${id}/tank/refill`, { volume_ml: volumeMl }),
   setVolume: (id: string, volumeMl: number) =>
     request<Machine>("PUT", `api/machines/${id}/tank/volume`, { volume_ml: volumeMl }),
+
+  // Расписание одного растения.
+  setSchedule: (id: string, routeId: string, schedule: ScheduleConfig) =>
+    request<Machine>("PUT", `api/machines/${id}/routes/${routeId}/schedule`, schedule),
+  clearSchedule: (id: string, routeId: string) =>
+    request<Machine>("DELETE", `api/machines/${id}/routes/${routeId}/schedule`),
+  listSchedules: () => request<Schedule[]>("GET", "api/schedules"),
+  checkSchedules: () =>
+    request<{ submitted: QueueItem[]; skipped: string[] }>("POST", "api/schedules/check"),
+
+  // Очередь поливов.
+  queue: () => request<QueueView>("GET", "api/queue"),
+  enqueue: (machineId: string, routeId: string, doseMl: number, maxWaitMin?: number) =>
+    request<QueueItem>("POST", "api/queue", {
+      machine_id: machineId,
+      route_id: routeId,
+      dose_ml: doseMl,
+      max_wait_min: maxWaitMin ?? null,
+    }),
+  cancelRequest: (requestId: string) => request<QueueItem>("DELETE", `api/queue/${requestId}`),
+
+  // Проблемы.
+  problems: () => request<Problem[]>("GET", "api/problems"),
+  checkProblems: () => request<Problem[]>("POST", "api/problems/check"),
+  ackProblem: (id: string) => request<Problem>("POST", `api/problems/${encodeURIComponent(id)}/ack`),
+  muteProblem: (id: string, hours: number) =>
+    request<Problem>("POST", `api/problems/${encodeURIComponent(id)}/mute`, { hours }),
+  unmuteProblem: (id: string) =>
+    request<Problem>("POST", `api/problems/${encodeURIComponent(id)}/unmute`),
 };
 
 export function errorText(error: unknown): string {

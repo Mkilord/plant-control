@@ -4,6 +4,7 @@ import { api, errorText, type Machine } from "../api";
 import { ml, time } from "../format";
 import { t } from "../i18n";
 import AppIcon from "./AppIcon.vue";
+import ScheduleDialog from "./ScheduleDialog.vue";
 import TankDialog from "./TankDialog.vue";
 import TankGauge from "./TankGauge.vue";
 import WaterDialog from "./WaterDialog.vue";
@@ -13,6 +14,7 @@ const emit = defineEmits<{ changed: [] }>();
 
 const showWater = ref(false);
 const showTank = ref(false);
+const showSchedule = ref(false);
 const error = ref("");
 
 const status = computed(() => props.machine.status);
@@ -31,6 +33,18 @@ const plantTitle = computed(() => {
   const named = props.machine.config.routes.map((r) => r.name).filter(Boolean);
   return named.length ? named.join(", ") : t("card.no_plant");
 });
+
+// Ближайший полив по расписанию среди всех растений машины.
+const nextRun = computed(() => {
+  const times = status.value.schedules
+    .filter((item) => item.enabled && item.next_run_at)
+    .map((item) => item.next_run_at as string)
+    .sort();
+  return times[0] ?? null;
+});
+
+// Заявка, которая ждёт своей очереди: пока горит эта метка, полив ещё не начался.
+const waiting = computed(() => status.value.queue.find((item) => item.state === "queued") ?? null);
 
 const pumpChip = computed(() => {
   switch (status.value.pump.state) {
@@ -80,6 +94,14 @@ async function stop() {
       <span v-if="status.busy" class="chip on pulse">
         <AppIcon name="droplet" :size="12" /> {{ t("card.watering") }}
       </span>
+      <span v-if="waiting" class="chip">
+        <AppIcon name="clock" :size="12" />
+        {{
+          waiting.position
+            ? t("card.queue_position", { position: waiting.position })
+            : t("card.queued")
+        }}
+      </span>
       <span class="chip" :class="pumpChip.cls">
         <AppIcon name="pump" :size="12" /> {{ pumpChip.text }}
       </span>
@@ -109,6 +131,13 @@ async function stop() {
       </span>
     </p>
 
+    <p class="last small">
+      <AppIcon name="clock" :size="14" />
+      <span class="muted">{{ t("card.next") }}</span>
+      <template v-if="nextRun">{{ time(nextRun) }}</template>
+      <span v-else class="muted">{{ t("card.no_schedule") }}</span>
+    </p>
+
     <div v-if="error" class="error">{{ error }}</div>
 
     <footer class="actions">
@@ -116,6 +145,9 @@ async function stop() {
         <AppIcon name="droplet" />{{ t("card.water") }}
       </button>
       <button @click="showTank = true"><AppIcon name="refill" />{{ t("card.tank") }}</button>
+      <button @click="showSchedule = true">
+        <AppIcon name="clock" />{{ t("card.schedule") }}
+      </button>
       <span class="spacer" />
       <button class="danger" :class="{ solid: status.busy }" @click="stop">
         <AppIcon name="stop" :size="16" />{{ t("card.stop") }}
@@ -132,6 +164,12 @@ async function stop() {
       v-if="showTank"
       :machine="machine"
       @close="showTank = false"
+      @changed="emit('changed')"
+    />
+    <ScheduleDialog
+      v-if="showSchedule"
+      :machine="machine"
+      @close="showSchedule = false"
       @changed="emit('changed')"
     />
   </article>
@@ -256,6 +294,7 @@ async function stop() {
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   margin-top: auto;

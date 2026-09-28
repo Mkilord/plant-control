@@ -1,8 +1,30 @@
 <script setup lang="ts">
+import { onMounted, onUnmounted, ref } from "vue";
+import { api } from "./api";
 import AppIcon, { type IconName } from "./components/AppIcon.vue";
 import { LOCALES, locale, t, theme, type Theme } from "./i18n";
 
 const version = __APP_VERSION__;
+
+// Счётчик проблем в навигации: видно, не требует ли что-то внимания.
+const problems = ref(0);
+let timer: number | undefined;
+
+async function count() {
+  try {
+    problems.value = (await api.problems()).filter((p) => !p.muted_until).length;
+  } catch {
+    // Молча: навигация не должна мешать работе с интерфейсом.
+  }
+}
+
+onMounted(async () => {
+  await count();
+  timer = window.setInterval(() => {
+    if (!document.hidden) void count();
+  }, 5000);
+});
+onUnmounted(() => window.clearInterval(timer));
 const themes: { value: Theme; icon: IconName }[] = [
   { value: "auto", icon: "monitor" },
   { value: "light", icon: "sun" },
@@ -12,6 +34,17 @@ const themes: { value: Theme; icon: IconName }[] = [
 
 <template>
   <div class="layout">
+    <nav class="nav">
+      <div class="nav-inner">
+        <RouterLink to="/"><AppIcon name="plant" :size="16" />{{ t("nav.machines") }}</RouterLink>
+        <RouterLink to="/queue"><AppIcon name="clock" :size="16" />{{ t("nav.queue") }}</RouterLink>
+        <RouterLink to="/problems">
+          <AppIcon name="alert" :size="16" />{{ t("nav.problems") }}
+          <span v-if="problems" class="count">{{ problems }}</span>
+        </RouterLink>
+      </div>
+    </nav>
+
     <main class="content">
       <RouterView />
     </main>
@@ -51,6 +84,49 @@ const themes: { value: Theme; icon: IconName }[] = [
 </template>
 
 <style scoped>
+.nav {
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+
+.nav-inner {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 8px 16px;
+  display: flex;
+  gap: 6px;
+}
+
+.nav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 9px;
+  font-size: 14px;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.nav a:hover {
+  background: var(--bg);
+}
+
+.nav a.router-link-exact-active {
+  color: var(--text);
+  background: var(--bg);
+}
+
+.count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 12px;
+  text-align: center;
+}
+
 .layout {
   min-height: 100vh;
   display: flex;

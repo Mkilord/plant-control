@@ -37,6 +37,8 @@ function defaultRoute(id: string): RouteConfig {
     connection: { length_mm: 700, inner_diameter_mm: 4 },
     outlet_height_mm: 300,
     correction: 1,
+    default_dose_ml: 100,
+    schedule: null,
   };
 }
 
@@ -57,6 +59,9 @@ function defaultConfig(): MachineConfig {
     head_model: "mid",
     routes: [defaultRoute("main")],
     timings: { valve_lead_s: 0.5, valve_lag_s: 0.5 },
+    power_group: "",
+    power_limit: 1,
+    power_gap_s: 2,
   };
 }
 
@@ -687,6 +692,42 @@ async function remove() {
           <button type="button" @click="addRoute"><AppIcon name="plus" />{{ t("plants.add") }}</button>
         </FormSection>
       </template>
+
+      <!-- Питание -->
+      <FormSection
+        :title="t('power.title')"
+        icon="pump"
+        accent="var(--accent-extra)"
+        :description="t('power.desc')"
+      >
+        <div class="fields">
+          <FormField
+            v-slot="{ id }"
+            :label="t('power.group')"
+            :hint="t('power.group_desc')"
+          >
+            <input
+              :id="id"
+              v-model="config.power_group"
+              type="text"
+              :placeholder="t('power.group_placeholder')"
+            />
+          </FormField>
+          <NumField
+            v-model="config.power_limit"
+            :label="t('power.limit')"
+            :hint="t('power.limit_desc')"
+            :min="1"
+          />
+          <NumField
+            v-model="config.power_gap_s"
+            :label="t('power.gap')"
+            :hint="t('power.gap_desc')"
+            :unit="t('unit.s')"
+            :min="0"
+          />
+        </div>
+      </FormSection>
 
       <!-- Дополнительно -->
       <details class="card advanced-card">
