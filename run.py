@@ -45,7 +45,6 @@ def main() -> None:
     )
 
     import uvicorn
-
     from plant_control_addon.api.app import create_app
     from plant_control_addon.settings import Settings
 
