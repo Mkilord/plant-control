@@ -63,6 +63,31 @@ def test_blocking_problems() -> None:
     assert board.for_machine("m-2") == []
 
 
+def test_valve_problem_blocks_only_its_plant() -> None:
+    board = ProblemBoard()
+    board.observe([Observation("m-1", ProblemKind.VALVE_ENTITY_MISSING, "v1")], T0)
+
+    assert [p.target for p in board.blocking_for("m-1", T0, {"v1"})] == ["v1"]
+    assert board.blocking_for("m-1", T0, {"v2"}) == []
+    # Без растения - всё, что мешает хоть какому-то поливу машины.
+    assert len(board.blocking_for("m-1", T0)) == 1
+
+
+def test_pump_problem_blocks_every_plant() -> None:
+    board = ProblemBoard()
+    board.observe([PUMP_GONE], T0)
+
+    assert len(board.blocking_for("m-1", T0, {"v2"})) == 1
+
+
+def test_muted_problem_still_blocks() -> None:
+    board = ProblemBoard()
+    board.observe([PUMP_GONE], T0)
+    board.mute(PUMP_GONE.key, T0 + timedelta(days=1))
+
+    assert len(board.blocking_for("m-1", T0)) == 1
+
+
 def test_acknowledge_keeps_problem_open() -> None:
     board = ProblemBoard()
     board.observe([PUMP_GONE], T0)

@@ -95,7 +95,11 @@ async def show_queue(control: Control) -> QueueOut:
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
 async def submit(body: SubmitRequest, control: Control) -> QueueItemOut:
-    """Заявка в обход проверки занятости: встанет в очередь и дождётся своего часа."""
+    """Заявка в обход проверки занятости: встанет в очередь и дождётся своего часа.
+
+    Проблемы, при которых полив невозможен, проверяются и здесь.
+    """
+    await control.ensure_can_water(body.machine_id, body.route_id)
     request = control.queue.submit(
         body.machine_id,
         body.route_id,

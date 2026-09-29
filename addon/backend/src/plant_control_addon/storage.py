@@ -1,7 +1,8 @@
-"""Хранилище машин в SQLite.
+"""Хранилище машин и настроек в SQLite.
 
-Одна таблица: id, конфигурация (JSON), состояние (JSON). Машина - агрегат,
+Машины: id, конфигурация (JSON), состояние (JSON). Машина - агрегат,
 поэтому хранится целиком, без разбора на таблицы.
+Настройки: ключ и значение (JSON), например настройки уведомлений.
 
 sqlite3 из стандартной библиотеки синхронный, поэтому каждый запрос уходит
 в отдельный поток через asyncio.to_thread, чтобы не блокировать цикл событий.
@@ -21,6 +22,14 @@ CREATE TABLE IF NOT EXISTS machines (
     config TEXT NOT NULL,
     state TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+"""
+
+SETTINGS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
     updated_at TEXT NOT NULL
 )
 """
@@ -54,6 +63,13 @@ class MachineStore:
     async def delete(self, machine_id: str) -> None:
         await asyncio.to_thread(self._delete, machine_id)
 
+    async def load_setting(self, key: str) -> str | None:
+        """JSON настройки или None, если её ещё не сохраняли."""
+        return await asyncio.to_thread(self._load_setting, key)
+
+    async def save_setting(self, key: str, value_json: str) -> None:
+        await asyncio.to_thread(self._save_setting, key, value_json)
+
     # --- Синхронная часть, выполняется в потоке ---
 
     def _connect(self) -> sqlite3.Connection:
@@ -64,6 +80,7 @@ class MachineStore:
         # with для соединения sqlite3 - это транзакция: commit при выходе, rollback при ошибке.
         with self._connect() as db:
             db.execute(SCHEMA)
+            db.execute(SETTINGS_SCHEMA)
 
     def _load_all(self) -> list[StoredMachine]:
         with self._connect() as db:
@@ -96,3 +113,21 @@ class MachineStore:
     def _delete(self, machine_id: str) -> None:
         with self._connect() as db:
             db.execute("DELETE FROM machines WHERE id = ?", (machine_id,))
+
+    def _load_setting(self, key: str) -> str | None:
+        with self._connect() as db:
+            row = db.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+            return str(row[0]) if row else None
+
+    def _save_setting(self, key: str, value: str) -> None:
+        now = datetime.now(UTC).isoformat()
+        with self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (key, value, now),
+            )

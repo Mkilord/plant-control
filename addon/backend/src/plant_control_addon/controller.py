@@ -22,7 +22,8 @@ from plant_control.application.queue import (
 )
 from plant_control.application.safety_service import SafetyService
 from plant_control.application.watering_service import WateringService, WateringTimings
-from plant_control.domain.errors import MachineBusyError
+from plant_control.domain.errors import MachineBusyError, WateringBlockedError
+from plant_control.domain.problems import Problem
 from plant_control.domain.pump import PumpState
 from plant_control.domain.watering import WateringPlan
 
@@ -107,10 +108,37 @@ class Controller:
         entry = self._registry.entry(machine_id)
         if self.is_busy(machine_id):
             raise MachineBusyError(f"machine {machine_id!r} is watering")
+        await self.ensure_can_water(machine_id, route_id)
         # План считаем сразу: так неверная доза или пустой бак видны в ответе.
         plan = await self._watering(entry).plan(machine_id, route_id, dose_ml)
         request = self.queue.submit(machine_id, route_id, dose_ml, source=source)
         return plan, request
+
+    def blockers(self, machine_id: str, route_id: str | None = None) -> list[Problem]:
+        """Открытые проблемы, из-за которых поливать нельзя. route_id - только для растения."""
+        if self._health is None:
+            return []
+        targets: set[str] | None = None
+        if route_id is not None:
+            targets = {route_id}
+            valve_id = self._registry.entry(machine_id).machine.valve_for(route_id)
+            if valve_id is not None:
+                targets.add(valve_id)
+        return self._health.board.blocking_for(machine_id, self._clock.now(), targets)
+
+    async def ensure_can_water(self, machine_id: str, route_id: str) -> None:
+        """Проверить состояние прямо сейчас и отказать, если полив невозможен.
+
+        Проверка свежая, а не из последнего круга: насос мог пропасть секунду назад.
+        """
+        self._registry.entry(machine_id)
+        if self._health is None:
+            return
+        await self.check_health()
+        problems = self.blockers(machine_id, route_id)
+        if problems:
+            kinds = ", ".join(problem.kind.value for problem in problems)
+            raise WateringBlockedError(f"watering is blocked: {kinds}", problems)
 
     def is_busy(self, machine_id: str) -> bool:
         """Занята, если поливает или ждёт своей очереди."""
@@ -125,19 +153,30 @@ class Controller:
 
     async def _run_watering(self, entry: MachineEntry, route_id: str, dose_ml: float) -> None:
         started = self._clock.now()
+        failure: Exception | None = None
         try:
+            # Пока заявка ждала очереди, могло что-то сломаться: проверяем перед самым стартом.
+            await self.ensure_can_water(entry.id, route_id)
             await self._watering(entry).water(entry.id, route_id, dose_ml)
         except asyncio.CancelledError:
             # Отмена: результат записываем, уведомление не отправляем -
             # в отменённой задаче любое ожидание сразу прерывается.
             self._record(entry, route_id, dose_ml, started, "cancelled")
             raise
+        except WateringBlockedError as exc:
+            log.warning("watering %s/%s blocked: %s", entry.id, route_id, exc)
+            failure = exc
         except Exception as exc:
             log.exception("watering %s/%s failed", entry.id, route_id)
-            self._record(entry, route_id, dose_ml, started, f"{type(exc).__name__}: {exc}")
-        else:
+            failure = exc
+        if failure is None:
             self._record(entry, route_id, dose_ml, started, None)
+        else:
+            self._record(entry, route_id, dose_ml, started, f"{type(failure).__name__}: {failure}")
         await self._notify_watering(entry, route_id, dose_ml)
+        if failure is not None:
+            # Очередь должна увидеть неудачу: заявка станет failed, а не done.
+            raise failure
 
     def _record(
         self,
@@ -183,7 +222,10 @@ class Controller:
         entry = self._registry.entry(machine_id)
         await self._cancel_queue(machine_id)
         await self._cancel_watering(entry)
-        return await self._safety(entry).emergency_stop(machine_id)
+        errors = await self._safety(entry).emergency_stop(machine_id)
+        # Стоп мог снять "состояние насоса неизвестно": обновить проблемы сразу.
+        await self._recheck()
+        return errors
 
     async def safe_start(self, machine_id: str) -> list[Exception]:
         entry = self._registry.entry(machine_id)
@@ -205,6 +247,7 @@ class Controller:
         else:
             entry.machine.tank.fill(volume_ml)
         await self._registry.save(entry.machine)
+        await self._recheck()
 
     async def set_tank_volume(self, machine_id: str, volume_ml: float) -> None:
         entry = self._registry.entry(machine_id)
@@ -212,6 +255,7 @@ class Controller:
             raise MachineBusyError(f"machine {machine_id!r} is watering")
         entry.machine.tank.set_measured_volume(volume_ml)
         await self._registry.save(entry.machine)
+        await self._recheck()
 
     async def shutdown(self) -> None:
         for task in list(self._background):
@@ -249,6 +293,13 @@ class Controller:
             log.info("problem closed: %s %s", problem.machine_id, problem.kind)
         await self._notify_problems(report)
         return report
+
+    async def _recheck(self) -> None:
+        """Проверка после действия человека: не должна ломать само действие."""
+        try:
+            await self.check_health()
+        except Exception:
+            log.exception("health check failed")
 
     async def _notify_problems(self, report: HealthReport) -> None:
         if self._notifications is None:

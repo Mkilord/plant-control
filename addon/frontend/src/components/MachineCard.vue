@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { api, errorText, type Machine } from "../api";
+import { api, errorText, problemText, type Machine } from "../api";
 import { ml, time } from "../format";
 import { t } from "../i18n";
 import AppIcon from "./AppIcon.vue";
@@ -45,6 +45,15 @@ const nextRun = computed(() => {
 
 // Заявка, которая ждёт своей очереди: пока горит эта метка, полив ещё не начался.
 const waiting = computed(() => status.value.queue.find((item) => item.state === "queued") ?? null);
+
+// Проблемы всей машины: пока они открыты, не полить ни одно растение.
+// Проблема клапана мешает только своему растению - о ней скажет окно полива.
+const machineBlockers = computed(() => status.value.blockers.filter((b) => !b.route_scoped));
+const blockedText = computed(() => machineBlockers.value.map(problemText).join("; "));
+// Растения, которые сейчас не полить из-за своего клапана.
+const blockedPlants = computed(
+  () => new Set(status.value.blockers.filter((b) => b.route_scoped).map((b) => b.target)),
+);
 
 const pumpChip = computed(() => {
   switch (status.value.pump.state) {
@@ -105,7 +114,17 @@ async function stop() {
       <span class="chip" :class="pumpChip.cls">
         <AppIcon name="pump" :size="12" /> {{ pumpChip.text }}
       </span>
+      <RouterLink
+        v-if="machineBlockers.length"
+        to="/problems"
+        class="chip danger"
+        :title="blockedText"
+      >
+        <AppIcon name="alert" :size="12" /> {{ t("card.blocked") }}
+      </RouterLink>
     </div>
+
+    <p v-if="machineBlockers.length" class="blocked small">{{ blockedText }}</p>
 
     <TankGauge :tank="status.tank" />
 
@@ -113,6 +132,9 @@ async function stop() {
       <li v-for="plant in plants" :key="plant.id">
         <AppIcon name="plant" :size="14" />
         <span class="plant-name">{{ plant.name }}</span>
+        <span v-if="blockedPlants.has(plant.id)" class="plant-blocked" :title="t('card.blocked')">
+          <AppIcon name="alert" :size="14" />
+        </span>
         <span
           class="dot"
           :class="{ open: plant.valve === 'open', unknown: plant.valve === 'unknown' }"
@@ -141,7 +163,12 @@ async function stop() {
     <div v-if="error" class="error">{{ error }}</div>
 
     <footer class="actions">
-      <button class="primary" :disabled="status.busy" @click="showWater = true">
+      <button
+        class="primary"
+        :disabled="status.busy || machineBlockers.length > 0"
+        :title="machineBlockers.length ? blockedText : undefined"
+        @click="showWater = true"
+      >
         <AppIcon name="droplet" />{{ t("card.water") }}
       </button>
       <button @click="showTank = true"><AppIcon name="refill" />{{ t("card.tank") }}</button>
@@ -266,6 +293,20 @@ async function stop() {
 .plant-name {
   color: var(--text);
   flex: 1;
+}
+
+a.chip {
+  text-decoration: none;
+}
+
+.blocked {
+  margin: 0;
+  color: var(--danger);
+}
+
+.plant-blocked {
+  display: inline-flex;
+  color: var(--danger);
 }
 
 .dot {

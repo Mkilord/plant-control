@@ -123,6 +123,11 @@ class HomeAssistantClient:
         result = await self._command({"type": "get_states"})
         return [EntityState.from_ha(raw) for raw in result]
 
+    async def get_services(self) -> dict[str, dict[str, Any]]:
+        """Сервисы HA по доменам: {"notify": {"mobile_app_pixel": {...}}, ...}."""
+        result: dict[str, dict[str, Any]] = await self._command({"type": "get_services"})
+        return result
+
     async def call_service(self, domain: str, service: str, entity_id: str) -> None:
         await self._command(
             {
@@ -134,7 +139,7 @@ class HomeAssistantClient:
         )
 
     async def call_service_data(self, domain: str, service: str, data: dict[str, Any]) -> None:
-        """Сервис с данными и без цели: так вызываются notify.* и уведомления HA."""
+        """Сервис с данными и без цели: так вызываются notify.*."""
         await self._command(
             {
                 "type": "call_service",

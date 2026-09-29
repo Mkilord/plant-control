@@ -1,12 +1,17 @@
-"""Уведомления и события в Home Assistant.
+"""Пуш-уведомления и события в Home Assistant.
 
-Ядро выдаёт событие (что случилось), здесь оно превращается в текст и уходит
-в HA: уведомление через сервис (persistent_notification или notify.*),
-событие - на шину, чтобы автоматизации могли реагировать сами.
+Ядро выдаёт событие (что случилось), здесь оно превращается в текст и уходит:
+уведомление - пушем на телефоны через приложение Home Assistant
+(сервисы notify.mobile_app_*), событие - на шину, чтобы автоматизации
+могли реагировать сами.
 """
 
 import logging
+import re
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from plant_control.application.notifications import Event, EventKind
 
@@ -42,26 +47,78 @@ REASONS: dict[str, str] = {
 }
 
 
-def message_for(event: Event) -> str:
-    """Человеческий текст события."""
+# Тексты по умолчанию. В {скобках} - подстановки, их список в PLACEHOLDERS.
+MESSAGES: dict[EventKind, str] = {
+    EventKind.WATERING_DONE: "{machine}: полито {plant}, {dose}.",
+    EventKind.WATERING_FAILED: "{machine}: не удалось полить {plant}. {error}",
+    EventKind.PROBLEM_OPENED: "{machine}: {problem} ({details}).",
+    EventKind.PROBLEM_CLOSED: "{machine}: {problem} - больше не наблюдается.",
+    EventKind.SCHEDULE_SKIPPED: "{machine}: полив {plant} пропущен, {reason}.",
+}
+
+# Какие подстановки есть у каждого вида события.
+PLACEHOLDERS: dict[EventKind, tuple[str, ...]] = {
+    EventKind.WATERING_DONE: ("machine", "plant", "dose", "time"),
+    EventKind.WATERING_FAILED: ("machine", "plant", "dose", "error", "time"),
+    EventKind.PROBLEM_OPENED: ("machine", "problem", "details", "time"),
+    EventKind.PROBLEM_CLOSED: ("machine", "problem", "time"),
+    EventKind.SCHEDULE_SKIPPED: ("machine", "plant", "reason", "time"),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class Texts:
+    """Свои тексты уведомлений. Пустое или отсутствующее - текст по умолчанию."""
+
+    titles: dict[EventKind, str] = field(default_factory=dict)
+    messages: dict[EventKind, str] = field(default_factory=dict)
+
+    def title(self, kind: EventKind) -> str:
+        return self.titles.get(kind, "").strip() or TITLES[kind]
+
+    def message(self, kind: EventKind) -> str:
+        return self.messages.get(kind, "").strip() or MESSAGES[kind]
+
+
+DEFAULT_TEXTS = Texts()
+
+
+def title_for(event: Event, texts: Texts = DEFAULT_TEXTS, timezone: str | None = None) -> str:
+    return render(texts.title(event.kind), values_for(event, timezone))
+
+
+def message_for(event: Event, texts: Texts = DEFAULT_TEXTS, timezone: str | None = None) -> str:
+    """Человеческий текст события по шаблону."""
+    return render(texts.message(event.kind), values_for(event, timezone))
+
+
+def values_for(event: Event, timezone: str | None = None) -> dict[str, str]:
+    """Значения подстановок события."""
     data = event.data
-    machine = event.machine_name
-    match event.kind:
-        case EventKind.WATERING_DONE:
-            return f"{machine}: полито {_plant(data)}, {_dose(data)}."
-        case EventKind.WATERING_FAILED:
-            return f"{machine}: не удалось полить {_plant(data)}. {data.get('error', '')}".strip()
-        case EventKind.PROBLEM_OPENED:
-            reason = PROBLEMS.get(str(data.get("problem")), str(data.get("problem")))
-            details = str(data.get("details") or "")
-            text = f"{machine}: {reason}"
-            return f"{text} ({details})." if details else f"{text}."
-        case EventKind.PROBLEM_CLOSED:
-            reason = PROBLEMS.get(str(data.get("problem")), str(data.get("problem")))
-            return f"{machine}: {reason} - больше не наблюдается."
-        case EventKind.SCHEDULE_SKIPPED:
-            reason = REASONS.get(str(data.get("reason")), str(data.get("reason")))
-            return f"{machine}: полив {_plant(data)} пропущен, {reason}."
+    problem = str(data.get("problem") or "")
+    reason = str(data.get("reason") or "")
+    at = event.at.astimezone(ZoneInfo(timezone)) if timezone else event.at
+    return {
+        "machine": event.machine_name,
+        "plant": _plant(data),
+        "dose": _dose(data),
+        "error": str(data.get("error") or ""),
+        "problem": PROBLEMS.get(problem, problem),
+        "details": str(data.get("details") or ""),
+        "reason": REASONS.get(reason, reason),
+        "time": at.strftime("%H:%M"),
+    }
+
+
+def render(template: str, values: dict[str, str]) -> str:
+    """Подставить значения. Неизвестная подстановка остаётся как есть, пустые скобки убираются."""
+    text = _PLACEHOLDER.sub(lambda m: values.get(m.group(1), m.group(0)), template)
+    # "({details})" без подробностей превращается в "()": убрать вместе с пробелом перед ними.
+    text = re.sub(r"\s*\(\s*\)", "", text)
+    return re.sub(r"[ \t]{2,}", " ", text).strip()
+
+
+_PLACEHOLDER = re.compile(r"\{(\w+)\}")
 
 
 def _plant(data: dict[str, Any]) -> str:
@@ -74,7 +131,15 @@ def _dose(data: dict[str, Any]) -> str:
     return f"{round(float(dose))} мл" if dose is not None else "доза не указана"
 
 
-class ServiceDataCaller(Protocol):
+def check_template(template: str) -> list[str]:
+    """Неизвестные подстановки в шаблоне: их стоит показать человеку."""
+    known = {name for names in PLACEHOLDERS.values() for name in names}
+    return sorted({name for name in _PLACEHOLDER.findall(template) if name not in known})
+
+
+class PushGateway(Protocol):
+    async def get_services(self) -> dict[str, dict[str, Any]]: ...
+
     async def call_service_data(self, domain: str, service: str, data: dict[str, Any]) -> None: ...
 
 
@@ -82,26 +147,145 @@ class EventFirer(Protocol):
     async def fire_event(self, event_type: str, data: dict[str, Any]) -> None: ...
 
 
-class HaNotifier:
-    """Реализация NotifierPort: уведомление через сервис Home Assistant."""
+# Сервисы notify.* приложения Home Assistant на телефонах так и называются.
+MOBILE_APP_PREFIX = "mobile_app_"
+# Каналы Android: у каждого свои звук и важность, настраиваются в телефоне.
+CHANNEL = "PlantControl"
+URGENT_CHANNEL = "PlantControl: срочно"
+# Особый канал приложения HA: звук идёт через будильник, слышно и в беззвучном режиме.
+ALARM_CHANNEL = "alarm_stream"
 
-    def __init__(self, ha: ServiceDataCaller, service: str) -> None:
-        domain, _, name = service.partition(".")
-        if not name:
-            raise ValueError(f"notify service must look like domain.service, got {service!r}")
+
+class NoPushTargetsError(RuntimeError):
+    """Некуда слать пуш: в HA нет ни одного телефона с приложением."""
+
+
+class PushNotifier:
+    """Реализация NotifierPort: пуш на телефоны через приложение Home Assistant.
+
+    Каждому телефону с приложением HA соответствует сервис notify.mobile_app_<имя>.
+    Список devices пуст - пуш уходит на все такие телефоны, их список берётся
+    у HA при каждой отправке, поэтому новый телефон подхватывается сам.
+
+    Настройки меняются на ходу через configure: их правят в интерфейсе.
+    """
+
+    def __init__(
+        self,
+        ha: PushGateway,
+        devices: Sequence[str] = (),
+        *,
+        open_url: str | None = None,
+        critical: bool = False,
+        texts: Texts = DEFAULT_TEXTS,
+        timezone: str | None = None,
+    ) -> None:
         self._ha = ha
-        self._domain = domain
-        self._service = name
+        self._timezone = timezone
+        self.configure(devices, open_url=open_url, critical=critical, texts=texts)
+
+    def configure(
+        self,
+        devices: Sequence[str] = (),
+        *,
+        open_url: str | None = None,
+        critical: bool = False,
+        texts: Texts = DEFAULT_TEXTS,
+    ) -> None:
+        self._devices = [_service_name(device) for device in devices if device.strip()]
+        self._open_url = open_url
+        self._critical = critical
+        self._texts = texts
+
+    async def available(self) -> list[str]:
+        """Все телефоны с приложением HA: mobile_app_pixel_7 и так далее."""
+        services = await self._ha.get_services()
+        return sorted(
+            name for name in services.get("notify", {}) if name.startswith(MOBILE_APP_PREFIX)
+        )
+
+    async def targets(self) -> list[str]:
+        """Сервисы notify, на которые уйдёт пуш: выбранные телефоны или все."""
+        if self._devices:
+            return list(self._devices)
+        return await self.available()
 
     async def send(self, event: Event) -> None:
-        data: dict[str, Any] = {
-            "title": TITLES[event.kind],
-            "message": message_for(event),
-        }
-        if self._domain == "persistent_notification":
-            # Одна проблема - одно уведомление: повтор заменит прежнее, а не добавит второе.
-            data["notification_id"] = f"{EVENT_PREFIX}_{event.machine_id}_{event.kind.value}"
-        await self._ha.call_service_data(self._domain, self._service, data)
+        await self.push(
+            title_for(event, self._texts, self._timezone),
+            message_for(event, self._texts, self._timezone),
+            self._push_data(event),
+        )
+
+    async def push(self, title: str, message: str, data: dict[str, Any]) -> list[str]:
+        """Отправить на все телефоны. Один недоступный телефон не мешает остальным.
+
+        Возвращает телефоны, куда пуш ушёл. Не ушёл никуда - исключение.
+        """
+        targets = await self.targets()
+        if not targets:
+            raise NoPushTargetsError(
+                "no phones with the Home Assistant app: install it and sign in"
+            )
+        payload = {"title": title, "message": message, "data": data}
+        delivered: list[str] = []
+        errors: list[str] = []
+        for target in targets:
+            try:
+                await self._ha.call_service_data("notify", target, payload)
+            except Exception as error:
+                log.warning("cannot push to notify.%s: %s", target, error)
+                errors.append(f"{target}: {error}")
+            else:
+                delivered.append(target)
+        if not delivered:
+            raise RuntimeError("push failed on every phone: " + "; ".join(errors))
+        return delivered
+
+    def base_data(self) -> dict[str, Any]:
+        """Общее для всех пушей: группа и что открыть по нажатию."""
+        data: dict[str, Any] = {"group": EVENT_PREFIX, "channel": CHANNEL}
+        if self._open_url:
+            # url - для iOS, clickAction - для Android.
+            data["url"] = self._open_url
+            data["clickAction"] = self._open_url
+        return data
+
+    def _push_data(self, event: Event) -> dict[str, Any]:
+        data = self.base_data()
+        # Пуш с тем же tag заменяет прежний: повтор беды не копится,
+        # а "проблема решена" встаёт на место "проблема".
+        data["tag"] = push_tag(event)
+        if event.urgent:
+            # Доставить сразу, даже если телефон экономит заряд.
+            data["priority"] = "high"
+            data["ttl"] = 0
+            data["importance"] = "high"
+            data["channel"] = URGENT_CHANNEL
+            data["push"] = {"interruption-level": "time-sensitive"}
+            if self._critical:
+                data["channel"] = ALARM_CHANNEL
+                data["push"] = {
+                    "interruption-level": "critical",
+                    "sound": {"name": "default", "critical": 1, "volume": 1.0},
+                }
+        return data
+
+
+def push_tag(event: Event) -> str:
+    """Метка пуша. Открытие и закрытие одной проблемы делят метку."""
+    if event.kind in (EventKind.PROBLEM_OPENED, EventKind.PROBLEM_CLOSED):
+        problem = event.data.get("problem")
+        target = event.data.get("target")
+        suffix = f"problem_{problem}_{target}" if target else f"problem_{problem}"
+        return f"{EVENT_PREFIX}_{event.machine_id}_{suffix}"
+    return f"{EVENT_PREFIX}_{event.machine_id}_{event.kind.value}"
+
+
+def _service_name(device: str) -> str:
+    """ "notify.mobile_app_pixel" и "mobile_app_pixel" - одно и то же."""
+    name = device.strip()
+    return name.removeprefix("notify.")
 
 
 class HaEventSink:

@@ -15,11 +15,6 @@ OPTIONS = Path("/data/options.json")
 ENV_BY_OPTION = {
     "timezone": "PLANT_CONTROL_TIMEZONE",
     "mqtt_enabled": "PLANT_CONTROL_MQTT_ENABLED",
-    "notify_enabled": "PLANT_CONTROL_NOTIFY_ENABLED",
-    "notify_service": "PLANT_CONTROL_NOTIFY_SERVICE",
-    "notify_events": "PLANT_CONTROL_NOTIFY_EVENTS",
-    "notify_quiet_from": "PLANT_CONTROL_NOTIFY_QUIET_FROM",
-    "notify_quiet_to": "PLANT_CONTROL_NOTIFY_QUIET_TO",
 }
 
 

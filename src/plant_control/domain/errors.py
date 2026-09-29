@@ -1,3 +1,7 @@
+from collections.abc import Sequence
+from typing import Any
+
+
 # Базовая ошибка домена насоса. Все остальные наследуются от неё,
 # чтобы снаружи можно было ловить одним except PumpError.
 # В Python нет checked exceptions, throws писать не нужно.
@@ -111,6 +115,14 @@ class UnknownRouteError(MachineError):
 
 class MachineBusyError(MachineError):
     pass
+
+
+class WateringBlockedError(MachineError):
+    """Полив невозможен, пока не решатся проблемы. problems - что мешает."""
+
+    def __init__(self, message: str, problems: Sequence[Any] = ()) -> None:
+        super().__init__(message)
+        self.problems = list(problems)
 
 
 # --- Расписание ---

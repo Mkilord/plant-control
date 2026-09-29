@@ -85,6 +85,61 @@ export interface MachineStatus {
   last_watering: WateringResult | null;
   schedules: ScheduleStatus[];
   queue: QueueItem[];
+  // Проблемы, из-за которых поливать нельзя. route_scoped - мешает только растению target.
+  blockers: Blocker[];
+}
+
+export interface Blocker {
+  kind: string;
+  target: string;
+  route_scoped: boolean;
+  details: string;
+}
+
+// --- Уведомления ---
+
+export type EventKind =
+  | "watering_done"
+  | "watering_failed"
+  | "problem_opened"
+  | "problem_closed"
+  | "schedule_skipped";
+
+export const EVENT_KINDS: EventKind[] = [
+  "watering_done",
+  "watering_failed",
+  "problem_opened",
+  "problem_closed",
+  "schedule_skipped",
+];
+
+export interface EventText {
+  title: string;
+  message: string;
+}
+
+export interface NotificationSettings {
+  enabled: boolean;
+  devices: string[];
+  critical: boolean;
+  events: EventKind[];
+  quiet_from: string;
+  quiet_to: string;
+  advanced: boolean;
+  texts: Partial<Record<EventKind, EventText>>;
+  open_url: string;
+}
+
+export interface PushDevices {
+  available: string[];
+  targets: string[];
+}
+
+export interface NotificationTemplate {
+  kind: EventKind;
+  title: string;
+  message: string;
+  placeholders: string[];
 }
 
 export interface ScheduleStatus {
@@ -210,7 +265,11 @@ function toError(status: number, data: unknown): ApiError {
     // Ошибка домена: {"error": "NotEnoughWaterError", "detail": "..."}
     if (typeof record.error === "string") {
       const key = `errors.${record.error}`;
-      const text = hasMessage(key) ? t(key) : String(record.detail ?? record.error);
+      let text = hasMessage(key) ? t(key) : String(record.detail ?? record.error);
+      // Полив запрещён: перечислить, что именно мешает.
+      if (Array.isArray(record.problems) && record.problems.length) {
+        text += ": " + (record.problems as Blocker[]).map(problemText).join("; ");
+      }
       return new ApiError(text, status, record.error);
     }
     // Ошибка валидации FastAPI: {"detail": [{"loc": [...], "msg": "..."}]}
@@ -277,7 +336,24 @@ export const api = {
     request<Problem>("POST", `api/problems/${encodeURIComponent(id)}/mute`, { hours }),
   unmuteProblem: (id: string) =>
     request<Problem>("POST", `api/problems/${encodeURIComponent(id)}/unmute`),
+
+  // Уведомления.
+  notificationSettings: () => request<NotificationSettings>("GET", "api/notifications/settings"),
+  saveNotificationSettings: (settings: NotificationSettings) =>
+    request<NotificationSettings>("PUT", "api/notifications/settings", settings),
+  pushDevices: () => request<PushDevices>("GET", "api/notifications/devices"),
+  notificationTemplates: () =>
+    request<NotificationTemplate[]>("GET", "api/notifications/templates"),
+  previewNotification: (kind: EventKind, text: EventText) =>
+    request<EventText>("POST", "api/notifications/preview", { kind, text }),
+  testPush: () =>
+    request<{ enabled: boolean; devices: string[] }>("POST", "api/notifications/test"),
 };
+
+export function problemText(problem: { kind: string }): string {
+  const key = `problem.${problem.kind}`;
+  return hasMessage(key) ? t(key) : problem.kind;
+}
 
 export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

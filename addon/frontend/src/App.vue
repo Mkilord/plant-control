@@ -42,6 +42,15 @@ const themes: { value: Theme; icon: IconName }[] = [
           <AppIcon name="alert" :size="16" />{{ t("nav.problems") }}
           <span v-if="problems" class="count">{{ problems }}</span>
         </RouterLink>
+        <span class="nav-spacer" />
+        <RouterLink
+          to="/settings"
+          class="nav-icon"
+          :title="t('nav.settings')"
+          :aria-label="t('nav.settings')"
+        >
+          <AppIcon name="settings" :size="18" />
+        </RouterLink>
       </div>
     </nav>
 
@@ -115,6 +124,14 @@ const themes: { value: Theme; icon: IconName }[] = [
 .nav a.router-link-exact-active {
   color: var(--text);
   background: var(--bg);
+}
+
+.nav-spacer {
+  flex: 1;
+}
+
+.nav a.nav-icon {
+  padding: 7px 9px;
 }
 
 .count {

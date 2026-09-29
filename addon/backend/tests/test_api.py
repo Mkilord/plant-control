@@ -19,6 +19,8 @@ async def test_lists_only_switchable_entities_sorted(api: httpx.AsyncClient) -> 
     assert response.status_code == 200
     assert [e["entity_id"] for e in response.json()] == [
         "input_boolean.test_valve",
+        "input_boolean.valve_1",
+        "input_boolean.valve_2",
         "switch.pump_1",
         "switch.pump_2",
     ]

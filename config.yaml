@@ -26,17 +26,7 @@ options:
   log_level: info
   timezone: Europe/Moscow
   mqtt_enabled: true
-  notify_enabled: true
-  notify_service: persistent_notification.create
-  notify_events: ""
-  notify_quiet_from: ""
-  notify_quiet_to: ""
 schema:
   log_level: list(debug|info|warning|error)
   timezone: str
   mqtt_enabled: bool
-  notify_enabled: bool
-  notify_service: str
-  notify_events: str
-  notify_quiet_from: str
-  notify_quiet_to: str

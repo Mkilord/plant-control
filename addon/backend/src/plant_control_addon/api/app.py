@@ -20,15 +20,18 @@ from plant_control_addon.api.errors import install_error_handlers
 from plant_control_addon.api.ha_routes import HaGateway
 from plant_control_addon.api.ha_routes import router as ha_router
 from plant_control_addon.api.machines import router as machines_router
+from plant_control_addon.api.notification_routes import router as notifications_router
 from plant_control_addon.api.problems import router as problems_router
 from plant_control_addon.api.queue_routes import router as queue_router
 from plant_control_addon.api.queue_routes import schedules_router
 from plant_control_addon.controller import Controller, SystemClock
 from plant_control_addon.ha.client import HomeAssistantClient
+from plant_control_addon.ha.supervisor import panel_path
 from plant_control_addon.health_source import HaHealthSource
 from plant_control_addon.mqtt.bridge import MqttBridge
 from plant_control_addon.mqtt.transport import resolve_broker, session_factory
-from plant_control_addon.notifications import HaEventSink, HaNotifier
+from plant_control_addon.notification_settings import NotificationSettingsManager
+from plant_control_addon.notifications import HaEventSink, PushNotifier
 from plant_control_addon.registry import MachineRegistry
 from plant_control_addon.settings import Settings
 from plant_control_addon.storage import MachineStore
@@ -74,22 +77,24 @@ def create_app(
         else:
             client = ha
 
-        registry = MachineRegistry(
-            MachineStore((data_dir or settings.data_dir) / DB_NAME), settings.checked_timezone
-        )
+        store = MachineStore((data_dir or settings.data_dir) / DB_NAME)
+        registry = MachineRegistry(store, settings.checked_timezone)
         await registry.load()
         clock = SystemClock()
         board = ProblemBoard()
         health = HealthService(registry, board, clock)
-        # Уведомления человеку и события на шину HA: и то и другое через один сервис.
-        notifications = NotificationService(
-            clock,
-            notifier=HaNotifier(client, settings.notify_service)
-            if settings.notify_enabled
-            else None,
-            sinks=[HaEventSink(client)],
-            rules=settings.notification_rules,
+        # Пуши на телефоны и события на шину HA: и то и другое через один сервис.
+        # Настройки пушей правятся в интерфейсе и применяются на ходу.
+        push = PushNotifier(client, timezone=settings.checked_timezone)
+        notifications = NotificationService(clock, sinks=[HaEventSink(client)])
+        notification_settings = NotificationSettingsManager(
+            store,
+            notifications,
+            push,
+            timezone=settings.checked_timezone,
+            panel_url=await panel_path(settings.supervisor_token),
         )
+        await notification_settings.load()
         controller = Controller(
             registry,
             client,
@@ -122,6 +127,8 @@ def create_app(
 
         app.state.problems = board
         app.state.notifications = notifications
+        app.state.push = push
+        app.state.notification_settings = notification_settings
         app.state.scheduler = scheduler
         tasks = [
             asyncio.create_task(controller.watchdog(watchdog_interval)),
@@ -163,6 +170,7 @@ def create_app(
     install_error_handlers(app)
     app.include_router(ha_router)
     app.include_router(machines_router)
+    app.include_router(notifications_router)
     app.include_router(problems_router)
     app.include_router(queue_router)
     app.include_router(schedules_router)

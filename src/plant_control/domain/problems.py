@@ -8,7 +8,7 @@
 только тогда, когда пропала причина.
 """
 
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import Enum
@@ -61,6 +61,12 @@ BLOCKING: frozenset[ProblemKind] = frozenset(
     }
 )
 
+# Проблемы одного клапана: мешают поливу только своего растения, остальные поливаются.
+# Их target - id маршрута или клапана.
+ROUTE_SCOPED: frozenset[ProblemKind] = frozenset(
+    {ProblemKind.VALVE_ENTITY_MISSING, ProblemKind.VALVE_STATE_UNKNOWN}
+)
+
 
 @dataclass(frozen=True, slots=True)
 class Observation:
@@ -99,6 +105,19 @@ class Problem:
     @property
     def blocking(self) -> bool:
         return self.kind in BLOCKING
+
+    @property
+    def route_scoped(self) -> bool:
+        """Касается одного растения, а не всей машины."""
+        return self.kind in ROUTE_SCOPED
+
+    def blocks(self, targets: Collection[str] | None = None) -> bool:
+        """Мешает ли поливу. targets - маршрут и его клапан; None - любое растение машины."""
+        if not self.blocking:
+            return False
+        if targets is None or not self.route_scoped:
+            return True
+        return self.target in targets
 
     def is_muted(self, now: datetime) -> bool:
         return self.muted_until is not None and now < self.muted_until
@@ -155,9 +174,14 @@ class ProblemBoard:
     def for_machine(self, machine_id: str) -> list[Problem]:
         return [p for p in self.all() if p.machine_id == machine_id]
 
-    def blocking_for(self, machine_id: str, now: datetime) -> list[Problem]:
-        """Проблемы, из-за которых поливать нельзя. Приглушение их не отменяет."""
-        return [p for p in self.for_machine(machine_id) if p.blocking]
+    def blocking_for(
+        self, machine_id: str, now: datetime, targets: Collection[str] | None = None
+    ) -> list[Problem]:
+        """Проблемы, из-за которых поливать нельзя. Приглушение их не отменяет.
+
+        targets - маршрут и его клапан: тогда проблемы других клапанов не мешают.
+        """
+        return [p for p in self.for_machine(machine_id) if p.blocks(targets)]
 
     def visible(self, now: datetime) -> list[Problem]:
         """Проблемы, которые стоит показать и о которых стоит уведомить."""

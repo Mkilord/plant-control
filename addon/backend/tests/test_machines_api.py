@@ -400,3 +400,95 @@ async def test_acknowledge_and_mute(api: httpx.AsyncClient, gateway: FakeGateway
 async def test_unknown_problem_is_404(api: httpx.AsyncClient) -> None:
     assert (await api.post("/api/problems/m-1|tank_low|/ack")).status_code == 404
     assert (await api.post("/api/problems/garbage/ack")).status_code == 404
+
+
+# --- Проблемы мешают поливу ---
+
+
+async def test_unavailable_pump_blocks_watering(
+    api: httpx.AsyncClient, gateway: FakeGateway
+) -> None:
+    machine_id = (await create(api, SIMPLE))["id"]
+    await api.post(f"/api/machines/{machine_id}/tank/refill", json={})
+    gateway.calls.clear()
+    # Насос пропал только что: круг проверки ещё не прошёл, но полив всё равно запрещён.
+    gateway.states[0] = EntityState("switch.pump_1", "unavailable", "Pump 1")
+
+    response = await api.post(
+        f"/api/machines/{machine_id}/water", json={"route_id": "main", "dose_ml": 50}
+    )
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["error"] == "WateringBlockedError"
+    assert [p["kind"] for p in body["problems"]] == ["pump_entity_missing"]
+    assert gateway.commands() == []
+    status = (await api.get(f"/api/machines/{machine_id}")).json()["status"]
+    assert [b["kind"] for b in status["blockers"]] == ["pump_entity_missing"]
+
+
+async def test_queue_submit_is_blocked_too(api: httpx.AsyncClient, gateway: FakeGateway) -> None:
+    machine_id = (await create(api, SIMPLE))["id"]
+    await api.post(f"/api/machines/{machine_id}/tank/refill", json={})
+    gateway.is_connected = False
+
+    response = await api.post(
+        "/api/queue", json={"machine_id": machine_id, "route_id": "main", "dose_ml": 50}
+    )
+
+    assert response.status_code == 409
+    assert (await api.get("/api/queue")).json()["queued"] == []
+
+
+async def test_empty_tank_blocks_watering(api: httpx.AsyncClient) -> None:
+    machine_id = (await create(api, SIMPLE))["id"]
+    await api.put(f"/api/machines/{machine_id}/tank/volume", json={"volume_ml": 0})
+
+    response = await api.post(
+        f"/api/machines/{machine_id}/water", json={"route_id": "main", "dose_ml": 50}
+    )
+
+    assert response.status_code == 409
+    assert [p["kind"] for p in response.json()["problems"]] == ["tank_empty"]
+
+
+async def test_missing_valve_blocks_only_its_plant(
+    api: httpx.AsyncClient, gateway: FakeGateway
+) -> None:
+    machine_id = (await create(api, COLLECTOR))["id"]
+    await api.post(f"/api/machines/{machine_id}/tank/refill", json={})
+    gateway.states = [s for s in gateway.states if s.entity_id != "input_boolean.valve_1"]
+
+    blocked = await api.post(
+        f"/api/machines/{machine_id}/water", json={"route_id": "v1", "dose_ml": 50}
+    )
+    allowed = await api.post(
+        f"/api/machines/{machine_id}/water", json={"route_id": "v2", "dose_ml": 50}
+    )
+
+    assert blocked.status_code == 409
+    assert allowed.status_code == 202
+    await wait_idle(api, machine_id)
+
+
+async def test_problem_appearing_while_queued_fails_the_request(tmp_path: Path) -> None:
+    gateway = FakeGateway()
+    app = create_app(ha=gateway, settings=settings(), data_dir=tmp_path, mqtt=False)
+    async with running(app) as api:
+        machine_id = (await create(api, SIMPLE))["id"]
+        await api.post(f"/api/machines/{machine_id}/tank/refill", json={})
+        # Заявка в очереди, а насос тем временем пропал.
+        gateway.states[0] = EntityState("switch.pump_1", "unavailable", "Pump 1")
+        gateway.calls.clear()
+        request = app.state.controller.queue.submit(machine_id, "main", 50)
+
+        for _ in range(200):
+            if request.is_finished:
+                break
+            await asyncio.sleep(0.01)
+
+        assert request.state.value == "failed"
+        assert "WateringBlockedError" in (request.error or "")
+        assert gateway.commands() == []
+        titles = [sent["title"] for sent in gateway.notifications]
+        assert "Полив не удался" in titles

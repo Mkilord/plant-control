@@ -28,6 +28,9 @@ class FakeGateway:
             EntityState("switch.pump_2", "off", "Pump 2"),
             EntityState("sensor.temperature", "21", "Temperature"),
             EntityState("input_boolean.test_valve", "on", "Test valve"),
+            # Клапаны коллектора из тестов: без них полив был бы запрещён.
+            EntityState("input_boolean.valve_1", "off", "Valve 1"),
+            EntityState("input_boolean.valve_2", "off", "Valve 2"),
         ]
         self.calls: list[tuple[str, str, str]] = []
         self.offline = False
@@ -35,11 +38,21 @@ class FakeGateway:
         self.connect_listeners: list[ConnectListener] = []
         self.notifications: list[dict[str, Any]] = []
         self.events: list[tuple[str, dict[str, Any]]] = []
+        # Телефоны с приложением HA: на них уходят пуши.
+        self.services: dict[str, dict[str, Any]] = {
+            "notify": {"mobile_app_phone": {}, "notify": {}, "persistent_notification": {}},
+            "switch": {"turn_on": {}, "turn_off": {}},
+        }
 
     async def get_states(self) -> list[EntityState]:
         if self.offline:
             raise HomeAssistantUnavailableError("offline")
         return self.states
+
+    async def get_services(self) -> dict[str, dict[str, Any]]:
+        if self.offline:
+            raise HomeAssistantUnavailableError("offline")
+        return self.services
 
     async def call_service(self, domain: str, service: str, entity_id: str) -> None:
         if self.offline:

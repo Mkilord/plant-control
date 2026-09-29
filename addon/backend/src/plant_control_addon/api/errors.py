@@ -4,6 +4,8 @@
 а код ответа выбирается по первому подходящему классу из списка.
 """
 
+from typing import Any
+
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from plant_control.application.ports import PumpControlError, ValveControlError
@@ -25,6 +27,7 @@ from plant_control.domain.errors import (
     UnknownRouteError,
     UnknownValveError,
     ValveAlreadyOpenError,
+    WateringBlockedError,
 )
 
 from plant_control_addon.ha.client import HomeAssistantError
@@ -38,6 +41,7 @@ STATUS_BY_ERROR: list[tuple[type[Exception], int]] = [
     (UnknownRequestError, status.HTTP_404_NOT_FOUND),
     # Правило нарушено из-за текущего состояния: позже может получиться.
     (MachineBusyError, status.HTTP_409_CONFLICT),
+    (WateringBlockedError, status.HTTP_409_CONFLICT),
     (PumpAlreadyRunningError, status.HTTP_409_CONFLICT),
     (PumpCoolingDownError, status.HTTP_409_CONFLICT),
     (PumpStateUnknownError, status.HTTP_409_CONFLICT),
@@ -70,10 +74,13 @@ HANDLED: tuple[type[Exception], ...] = (
 
 async def _handle(request: Request, error: Exception) -> JSONResponse:
     code = next(code for kind, code in STATUS_BY_ERROR if isinstance(error, kind))
-    return JSONResponse(
-        status_code=code,
-        content={"error": type(error).__name__, "detail": str(error)},
-    )
+    content: dict[str, Any] = {"error": type(error).__name__, "detail": str(error)}
+    if isinstance(error, WateringBlockedError):
+        # Что именно мешает: интерфейс покажет это своими словами.
+        content["problems"] = [
+            {"kind": p.kind.value, "target": p.target, "details": p.details} for p in error.problems
+        ]
+    return JSONResponse(status_code=code, content=content)
 
 
 def install_error_handlers(app: FastAPI) -> None:

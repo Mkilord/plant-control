@@ -103,6 +103,16 @@ class NotificationService:
         self._sinks = list(sinks)
         self.rules = rules or NotificationRules()
 
+    @property
+    def enabled(self) -> bool:
+        """Есть ли кому доставлять уведомления. События на шину уходят в любом случае."""
+        return self._notifier is not None
+
+    def configure(self, notifier: NotifierPort | None, rules: NotificationRules) -> None:
+        """Сменить доставку и правила на ходу. None - уведомления выключены."""
+        self._notifier = notifier
+        self.rules = rules
+
     async def emit(self, event: Event) -> bool:
         """Опубликовать событие и, если правила разрешают, отправить уведомление.
 

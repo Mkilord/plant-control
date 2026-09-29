@@ -230,7 +230,6 @@ def test_unknown_timezone_falls_back_to_utc() -> None:
     """Без базы часовых поясов (так бывает в Windows) add-on не должен падать."""
     assert settings(timezone="Europe/Moscow").checked_timezone in ("Europe/Moscow", "UTC")
     assert settings(timezone="Nowhere/Nothing").checked_timezone == "UTC"
-    assert settings(timezone="Nowhere/Nothing").notification_rules.timezone == "UTC"
 
 
 async def test_schedule_works_with_a_broken_timezone(gateway: FakeGateway, tmp_path: Path) -> None:

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t } from "../i18n";
 import { computed, ref, watch } from "vue";
-import { api, errorText, type Machine, type Plan } from "../api";
+import { api, errorText, problemText, type Machine, type Plan } from "../api";
 import { ml, seconds } from "../format";
 import AppIcon from "./AppIcon.vue";
 import ModalDialog from "./ModalDialog.vue";
@@ -16,6 +16,12 @@ const dose = ref(100);
 const plan = ref<Plan | null>(null);
 const error = ref("");
 const busy = ref(false);
+
+// Что мешает поливу выбранного растения: проблемы машины и его клапана.
+const blockers = computed(() =>
+  props.machine.status.blockers.filter((b) => !b.route_scoped || b.target === routeId.value),
+);
+const blockedText = computed(() => blockers.value.map(problemText).join("; "));
 
 // Любое изменение входных данных делает расчёт устаревшим.
 watch([routeId, dose], () => {
@@ -97,13 +103,16 @@ function routeLabel(id: string): string {
       </tbody>
     </table>
 
+    <div v-if="blockers.length" class="error">
+      {{ t("water.blocked", { reasons: blockedText }) }}
+    </div>
     <div v-if="error" class="error">{{ error }}</div>
 
     <div class="row">
       <button :disabled="busy || dose <= 0" @click="calculate">
         <AppIcon name="calculator" />{{ t("water.calculate") }}
       </button>
-      <button class="primary" :disabled="busy || dose <= 0" @click="water">
+      <button class="primary" :disabled="busy || dose <= 0 || blockers.length > 0" @click="water">
         <AppIcon name="droplet" />{{ t("water.start") }}
       </button>
     </div>

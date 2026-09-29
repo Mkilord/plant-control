@@ -64,6 +64,15 @@ class ScheduleStatus(BaseModel):
     last_run_at: datetime | None
 
 
+class BlockerOut(BaseModel):
+    """Проблема, из-за которой полив невозможен. route_scoped - мешает только растению target."""
+
+    kind: str
+    target: str
+    route_scoped: bool
+    details: str
+
+
 class MachineStatus(BaseModel):
     busy: bool
     tank: TankStatus
@@ -73,6 +82,7 @@ class MachineStatus(BaseModel):
     last_watering: WateringResultOut | None
     schedules: list[ScheduleStatus] = []
     queue: list[QueueItemOut] = []
+    blockers: list[BlockerOut] = []
 
 
 class MachineOut(BaseModel):
@@ -161,6 +171,17 @@ def machine_out(entry: MachineEntry, control: Controller | None = None) -> Machi
             queue=[
                 queue_item_out(request, control.queue.position(request.id))
                 for request in control.queue.for_machine(entry.id)
+            ]
+            if control
+            else [],
+            blockers=[
+                BlockerOut(
+                    kind=problem.kind.value,
+                    target=problem.target,
+                    route_scoped=problem.route_scoped,
+                    details=problem.details,
+                )
+                for problem in control.blockers(entry.id)
             ]
             if control
             else [],
