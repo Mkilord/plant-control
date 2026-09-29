@@ -1,8 +1,8 @@
 """Настоящее соединение с брокером MQTT.
 
-Внутри add-on'а адрес и пароль брокера выдаёт Supervisor: add-on не знает их
-заранее, а спрашивает по внутреннему адресу. При разработке те же данные
-берутся из настроек (.env).
+Брокер задаётся в интерфейсе. В режиме "автоматически" адрес и пароль выдаёт
+Supervisor (брокер Mosquitto из магазина add-on'ов), а при разработке они
+берутся из .env. В режиме "вручную" - то, что введено в настройках.
 
 Всё, что связано с библиотекой aiomqtt, живёт только здесь: мост знает лишь
 протокол сессии.
@@ -32,10 +32,12 @@ class BrokerConfig:
     port: int = 1883
     username: str = ""
     password: str = ""
+    # Откуда взят брокер: supervisor, env или manual. Показывается в интерфейсе.
+    source: str = "manual"
 
 
 async def resolve_broker(settings: Settings) -> BrokerConfig | None:
-    """Данные брокера: сначала Supervisor, потом настройки. None - брокера нет."""
+    """Брокер автоматически: сначала Supervisor, потом .env. None - брокера нет."""
     if settings.supervisor_token:
         broker = await _ask_supervisor(settings.supervisor_token)
         if broker is not None:
@@ -47,6 +49,7 @@ async def resolve_broker(settings: Settings) -> BrokerConfig | None:
         port=settings.mqtt_port,
         username=settings.mqtt_user,
         password=settings.mqtt_password,
+        source="env",
     )
 
 
@@ -75,6 +78,7 @@ async def _ask_supervisor(token: str) -> BrokerConfig | None:
         port=int(data.get("port") or 1883),
         username=str(data.get("username") or ""),
         password=str(data.get("password") or ""),
+        source="supervisor",
     )
 
 

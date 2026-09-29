@@ -135,6 +135,29 @@ export interface PushDevices {
   targets: string[];
 }
 
+// --- MQTT ---
+
+export interface MqttSettings {
+  enabled: boolean;
+  mode: "auto" | "manual";
+  host: string;
+  port: number;
+  username: string;
+  // Пароль сервер не отдаёт: только признак, что он задан.
+  has_password: boolean;
+  discovery_prefix: string;
+}
+
+// Правка: password null - оставить прежний.
+export type MqttSettingsIn = Omit<MqttSettings, "has_password"> & { password: string | null };
+
+export interface MqttStatus {
+  state: "off" | "no_broker" | "connecting" | "connected" | "error";
+  source: "" | "supervisor" | "env" | "manual";
+  broker: string;
+  error: string | null;
+}
+
 export interface NotificationTemplate {
   kind: EventKind;
   title: string;
@@ -349,6 +372,10 @@ export const api = {
     request<NotificationTemplate[]>("GET", "api/notifications/templates"),
   previewNotification: (kind: EventKind, text: EventText) =>
     request<EventText>("POST", "api/notifications/preview", { kind, text }),
+  mqttSettings: () => request<MqttSettings>("GET", "api/mqtt/settings"),
+  saveMqttSettings: (settings: MqttSettingsIn) =>
+    request<MqttSettings>("PUT", "api/mqtt/settings", settings),
+  mqttStatus: () => request<MqttStatus>("GET", "api/mqtt/status"),
   testPush: () =>
     request<{ enabled: boolean; devices: string[] }>("POST", "api/notifications/test"),
 };

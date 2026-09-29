@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// Настройки add-on'а. Пока здесь уведомления: кому слать, о чём, тихие часы,
-// а с флажком "Расширенные настройки" - свои тексты и адрес по нажатию.
+// Настройки add-on'а: уведомления (кому слать, о чём, тихие часы) и MQTT.
+// С флажком "Расширенные настройки" - свои тексты уведомлений, адрес по нажатию
+// и префикс MQTT discovery.
 import { computed, onMounted, ref, watch } from "vue";
 import {
   api,
@@ -16,6 +17,7 @@ import AppIcon from "../components/AppIcon.vue";
 import FormField from "../components/FormField.vue";
 import FormSection from "../components/FormSection.vue";
 import InfoTip from "../components/InfoTip.vue";
+import MqttSection from "../components/MqttSection.vue";
 import { hasMessage, t } from "../i18n";
 
 const settings = ref<NotificationSettings | null>(null);
@@ -29,8 +31,10 @@ const saving = ref(false);
 // Что лежит на сервере: по нему видно, есть ли несохранённые правки.
 const snapshot = ref("");
 const savedOnce = ref(false);
+const mqtt = ref<InstanceType<typeof MqttSection> | null>(null);
 const saved = computed(
-  () => savedOnce.value && JSON.stringify(settings.value) === snapshot.value,
+  () =>
+    savedOnce.value && JSON.stringify(settings.value) === snapshot.value && !mqtt.value?.dirty,
 );
 const error = ref("");
 const testing = ref(false);
@@ -162,6 +166,8 @@ async function save() {
   error.value = "";
   saving.value = true;
   try {
+    // MQTT сохраняется, только если его правили: сохранение переподключает мост.
+    await mqtt.value?.save();
     accept(await api.saveNotificationSettings(settings.value));
     savedOnce.value = true;
     await loadDevices();
@@ -283,6 +289,9 @@ async function testPush() {
           </div>
         </fieldset>
       </FormSection>
+
+      <!-- MQTT -->
+      <MqttSection ref="mqtt" :advanced="settings.advanced" />
 
       <!-- Расширенные -->
       <div class="card advanced-toggle">

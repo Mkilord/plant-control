@@ -63,6 +63,8 @@ class MqttBridge:
         self._reconnect_delay = reconnect_delay
         self._announced: set[str] = set()
         self.connected = False
+        # Последняя ошибка соединения: интерфейс показывает, почему нет связи.
+        self.last_error: str | None = None
 
     # --- Жизненный цикл ---
 
@@ -72,12 +74,23 @@ class MqttBridge:
             try:
                 async with self._factory() as session:
                     self.connected = True
-                    await self._on_connect(session)
-                    await self._serve(session)
+                    self.last_error = None
+                    try:
+                        await self._on_connect(session)
+                        await self._serve(session)
+                    except asyncio.CancelledError:
+                        # Мост остановили (выключили MQTT, сменили брокер): сущности
+                        # машин в HA должны стать недоступными, а не висеть "в сети".
+                        with contextlib.suppress(Exception):
+                            await asyncio.wait_for(
+                                session.publish(AVAILABILITY, OFFLINE, retain=True), 2
+                            )
+                        raise
             except asyncio.CancelledError:
                 raise
             except Exception as error:
                 log.warning("mqtt connection failed: %s", error)
+                self.last_error = str(error) or type(error).__name__
             finally:
                 self.connected = False
                 self._announced.clear()

@@ -3,15 +3,19 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 import pytest
 from plant_control.domain.problems import Observation, ProblemBoard, ProblemKind
 
 from plant_control_addon.config import MachineConfig
 from plant_control_addon.controller import Controller, SystemClock
 from plant_control_addon.mqtt.bridge import MqttBridge
+from plant_control_addon.mqtt.settings import MqttManager, MqttSettingsIn
 from plant_control_addon.mqtt.topics import AVAILABILITY, discovery, state_topic
+from plant_control_addon.mqtt.transport import BrokerConfig
 from plant_control_addon.registry import MachineEntry, MachineRegistry
 from plant_control_addon.settings import Settings
 from plant_control_addon.storage import MachineStore
@@ -217,3 +221,128 @@ async def test_resolve_broker_falls_back_to_settings() -> None:
     broker = await resolve_broker(configured)
     assert broker is not None
     assert (broker.host, broker.port, broker.username) == ("core-mosquitto", 1883, "pc")
+
+
+# --- Настройки MQTT и переподключение ---
+
+
+class MemoryStore:
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    async def load_setting(self, key: str) -> str | None:
+        return self.values.get(key)
+
+    async def save_setting(self, key: str, value_json: str) -> None:
+        self.values[key] = value_json
+
+
+class Rig:
+    """Менеджер MQTT с поддельными брокерами: каждое подключение даёт свою сессию."""
+
+    def __init__(
+        self,
+        registry: MachineRegistry,
+        controller: Controller,
+        board: ProblemBoard,
+        auto: BrokerConfig | None = None,
+    ) -> None:
+        self.store = MemoryStore()
+        self.sessions: list[tuple[BrokerConfig, FakeSession]] = []
+        self.auto = auto
+
+        def make_bridge(broker: BrokerConfig, prefix: str) -> MqttBridge:
+            @asynccontextmanager
+            async def connect() -> AsyncIterator[FakeSession]:
+                session = FakeSession()
+                self.sessions.append((broker, session))
+                yield session
+
+            return MqttBridge(connect, registry, controller, board, discovery_prefix=prefix)
+
+        async def auto_broker() -> BrokerConfig | None:
+            return self.auto
+
+        self.manager = MqttManager(self.store, auto_broker, make_bridge)
+
+
+async def settle(manager: MqttManager) -> None:
+    for _ in range(100):
+        if manager.status().state == "connected":
+            return
+        await asyncio.sleep(0.01)
+
+
+async def test_auto_broker_connects(
+    registry: MachineRegistry, controller: Controller, board: ProblemBoard
+) -> None:
+    rig = Rig(registry, controller, board, auto=BrokerConfig("core-mosquitto", source="supervisor"))
+    await rig.manager.load()
+    await settle(rig.manager)
+
+    status = rig.manager.status()
+    assert (status.state, status.source, status.broker) == (
+        "connected",
+        "supervisor",
+        "core-mosquitto:1883",
+    )
+    await rig.manager.stop()
+
+
+async def test_no_broker_and_disabled_states(
+    registry: MachineRegistry, controller: Controller, board: ProblemBoard
+) -> None:
+    rig = Rig(registry, controller, board)
+    await rig.manager.load()
+    assert rig.manager.status().state == "no_broker"
+
+    await rig.manager.update(MqttSettingsIn(enabled=False))
+    assert rig.manager.status().state == "off"
+    assert rig.sessions == []
+
+
+async def test_manual_broker_reconnects_and_keeps_password(
+    registry: MachineRegistry, controller: Controller, board: ProblemBoard
+) -> None:
+    rig = Rig(registry, controller, board, auto=BrokerConfig("core-mosquitto"))
+    await rig.manager.load()
+    await settle(rig.manager)
+    first = rig.sessions[0][1]
+
+    await rig.manager.update(
+        MqttSettingsIn(mode="manual", host="10.0.0.5", port=1884, username="pc", password="secret")
+    )
+    await settle(rig.manager)
+    # Старый мост объявил машины недоступными, новый подключился к своему брокеру.
+    assert (AVAILABILITY, "offline", True) in first.published
+    broker, _ = rig.sessions[-1]
+    assert (broker.host, broker.port, broker.username, broker.password) == (
+        "10.0.0.5",
+        1884,
+        "pc",
+        "secret",
+    )
+
+    # Пароль не передан - остаётся прежний, а наружу не отдаётся вовсе.
+    saved = await rig.manager.update(
+        MqttSettingsIn(mode="manual", host="10.0.0.5", port=1884, username="pc")
+    )
+    assert saved.password == "secret"
+    assert "password" not in saved.public().model_dump()
+    assert saved.public().has_password is True
+    await rig.manager.stop()
+
+
+async def test_mqtt_api(api: httpx.AsyncClient) -> None:
+    # В тестовом приложении MQTT запрещён целиком: состояние "выключен".
+    assert (await api.get("/api/mqtt/status")).json()["state"] == "off"
+    saved = await api.put(
+        "/api/mqtt/settings", json={"mode": "manual", "host": "broker", "password": "x"}
+    )
+    assert saved.status_code == 200
+    body = (await api.get("/api/mqtt/settings")).json()
+    assert body["host"] == "broker"
+    assert body["has_password"] is True
+    assert "password" not in body
+    bad = await api.put("/api/mqtt/settings", json={"port": 70000})
+    assert bad.status_code == 422

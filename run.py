@@ -14,7 +14,6 @@ OPTIONS = Path("/data/options.json")
 # Ключ настройки -> переменная окружения. Значения, которых нет, пропускаются.
 ENV_BY_OPTION = {
     "timezone": "PLANT_CONTROL_TIMEZONE",
-    "mqtt_enabled": "PLANT_CONTROL_MQTT_ENABLED",
 }
 
 

@@ -30,15 +30,13 @@ class Settings(BaseSettings):
     # Собранный фронт. Не задано - берётся папка static внутри пакета (так в add-on'е).
     static_dir: Path | None = None
 
-    # MQTT: сущности машин в Home Assistant. Внутри add-on'а данные брокера
-    # выдаёт Supervisor, при разработке их задают здесь.
-    mqtt_enabled: bool = True
+    # MQTT: сущности машин в Home Assistant. Включение и брокер настраиваются
+    # в интерфейсе. Здесь - брокер для режима "автоматически" при разработке,
+    # когда Supervisor его не выдаёт.
     mqtt_host: str = ""
     mqtt_port: int = 1883
     mqtt_user: str = ""
     mqtt_password: str = ""
-    # Префикс, по которому Home Assistant ищет описания сущностей.
-    mqtt_discovery_prefix: str = "homeassistant"
     # Уведомления настраиваются в интерфейсе (шестерёнка) и хранятся в базе.
     # Часовой пояс для расписаний и тихих часов.
     timezone: str = "UTC"

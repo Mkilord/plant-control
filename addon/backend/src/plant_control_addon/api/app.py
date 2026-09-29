@@ -21,6 +21,7 @@ from plant_control_addon.api.errors import install_error_handlers
 from plant_control_addon.api.ha_routes import HaGateway
 from plant_control_addon.api.ha_routes import router as ha_router
 from plant_control_addon.api.machines import router as machines_router
+from plant_control_addon.api.mqtt_routes import router as mqtt_router
 from plant_control_addon.api.notification_routes import router as notifications_router
 from plant_control_addon.api.problems import router as problems_router
 from plant_control_addon.api.queue_routes import router as queue_router
@@ -30,7 +31,8 @@ from plant_control_addon.ha.client import HomeAssistantClient
 from plant_control_addon.ha.supervisor import panel_path
 from plant_control_addon.health_source import HaHealthSource
 from plant_control_addon.mqtt.bridge import MqttBridge
-from plant_control_addon.mqtt.transport import resolve_broker, session_factory
+from plant_control_addon.mqtt.settings import MqttManager
+from plant_control_addon.mqtt.transport import BrokerConfig, resolve_broker, session_factory
 from plant_control_addon.notification_settings import NotificationSettingsManager
 from plant_control_addon.notifications import HaEventSink, PushNotifier
 from plant_control_addon.registry import MachineRegistry
@@ -141,23 +143,17 @@ def create_app(
             asyncio.create_task(scheduler.run(schedule_interval)),
         ]
 
-        # Мост в HA поднимается только если брокер вообще есть.
-        bridge: MqttBridge | None = None
-        if mqtt and settings.mqtt_enabled:
-            broker = await resolve_broker(settings)
-            if broker is None:
-                log.info("mqtt is off: no broker configured")
-            else:
-                log.info("mqtt broker %s:%s", broker.host, broker.port)
-                bridge = MqttBridge(
-                    session_factory(broker),
-                    registry,
-                    controller,
-                    board,
-                    discovery_prefix=settings.mqtt_discovery_prefix,
-                )
-                tasks.append(asyncio.create_task(bridge.run()))
-        app.state.mqtt = bridge
+        # Мост в HA через MQTT: брокер и включение настраиваются в интерфейсе.
+        def make_bridge(broker: BrokerConfig, prefix: str) -> MqttBridge:
+            return MqttBridge(
+                session_factory(broker), registry, controller, board, discovery_prefix=prefix
+            )
+
+        mqtt_manager = MqttManager(
+            store, lambda: resolve_broker(settings), make_bridge, allowed=mqtt
+        )
+        await mqtt_manager.load()
+        app.state.mqtt = mqtt_manager
 
         try:
             yield
@@ -166,6 +162,7 @@ def create_app(
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+            await mqtt_manager.stop()
             await controller.shutdown()
             if real_client is not None:
                 await real_client.stop()
@@ -174,6 +171,7 @@ def create_app(
     install_error_handlers(app)
     app.include_router(ha_router)
     app.include_router(machines_router)
+    app.include_router(mqtt_router)
     app.include_router(notifications_router)
     app.include_router(problems_router)
     app.include_router(queue_router)
