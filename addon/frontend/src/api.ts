@@ -156,12 +156,15 @@ export interface QueueItem {
   route_id: string;
   dose_ml: number;
   source: "manual" | "schedule";
-  state: "queued" | "running" | "done" | "failed" | "cancelled" | "expired";
+  state: "queued" | "running" | "done" | "failed" | "cancelled" | "expired" | "skipped";
   requested_at: string;
   started_at: string | null;
   finished_at: string | null;
   error: string | null;
   position: number | null;
+  // Названия для показа. machine_name null - машину уже удалили.
+  machine_name: string | null;
+  plant_name: string;
 }
 
 export interface QueueView {
@@ -353,6 +356,24 @@ export const api = {
 export function problemText(problem: { kind: string }): string {
   const key = `problem.${problem.kind}`;
   return hasMessage(key) ? t(key) : problem.kind;
+}
+
+// Ошибка из журнала: "WateringBlockedError: watering is blocked: tank_empty" -> понятный текст.
+// Для пропуска по расписанию в error лежит причина: recently_watered, too_late.
+export function humanError(text: string | null): string {
+  if (!text) return "";
+  const reason = `reason.${text}`;
+  if (hasMessage(reason)) return t(reason);
+  const match = /^(\w+Error):\s*(.*)$/.exec(text);
+  if (!match) return text;
+  const [, name, detail] = match;
+  const key = `errors.${name}`;
+  if (!hasMessage(key)) return detail || name;
+  if (name === "WateringBlockedError") {
+    const kinds = detail.split(":").pop()!.split(",").map((kind) => kind.trim()).filter(Boolean);
+    return kinds.length ? `${t(key)}: ${kinds.map((kind) => problemText({ kind })).join(", ")}` : t(key);
+  }
+  return t(key);
 }
 
 export function errorText(error: unknown): string {

@@ -169,7 +169,7 @@ def machine_out(entry: MachineEntry, control: Controller | None = None) -> Machi
                 for route_id, schedule in entry.schedules.items()
             ],
             queue=[
-                queue_item_out(request, control.queue.position(request.id))
+                queue_item_out(request, control.queue.position(request.id), control)
                 for request in control.queue.for_machine(entry.id)
             ]
             if control
@@ -243,7 +243,7 @@ async def start_watering(machine_id: str, body: WateringRequest, control: Contro
     plan, request = await control.start_watering(machine_id, body.route_id, body.dose_ml)
     return StartOut(
         plan=PlanOut(**dataclasses.asdict(plan)),
-        request=queue_item_out(request, control.queue.position(request.id)),
+        request=queue_item_out(request, control.queue.position(request.id), control),
     )
 
 

@@ -8,9 +8,9 @@
 import asyncio
 import contextlib
 import logging
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Iterable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Protocol
 
 from plant_control.application.health import HealthReport, HealthService
 from plant_control.application.notifications import Event, NotificationService
@@ -45,6 +45,12 @@ class AsyncioSleeper:
         await asyncio.sleep(duration.total_seconds())
 
 
+class Journal(Protocol):
+    """Куда сохранять завершённые поливы. Обычно база add-on'а."""
+
+    async def save_watering(self, request: WateringRequest) -> None: ...
+
+
 class Controller:
     def __init__(
         self,
@@ -57,8 +63,11 @@ class Controller:
         health_source: HaHealthSource | None = None,
         notifications: NotificationService | None = None,
         queue_tick: float = 0.1,
+        journal: Journal | None = None,
+        history: Iterable[WateringRequest] = (),
     ) -> None:
         self._registry = registry
+        self._journal = journal
         self._health = health
         self._notifications = notifications
         self._health_source = health_source
@@ -68,7 +77,14 @@ class Controller:
         self._background: set[asyncio.Task[Any]] = set()
         # Очередь поливов: она же следит за группами питания.
         # Сам контроллер для неё - исполнитель (метод water).
-        self.queue = WateringQueue(self, self._clock, registry.power_group, tick=queue_tick)
+        self.queue = WateringQueue(
+            self,
+            self._clock,
+            registry.power_group,
+            tick=queue_tick,
+            history=history,
+            on_finished=self._save_to_journal,
+        )
 
     def now(self) -> datetime:
         return self._clock.now()
@@ -212,6 +228,14 @@ class Controller:
             event = self._notifications.watering_done(entry.id, name, plant, dose_ml)
         await self._notifications.emit(event)
 
+    def names(self, machine_id: str, route_id: str) -> tuple[str | None, str]:
+        """Название машины и растения для показа. None - машины уже нет."""
+        try:
+            entry = self._registry.entry(machine_id)
+        except Exception:
+            return None, route_id
+        return entry.config.name, self._plant_name(entry, route_id)
+
     def _plant_name(self, entry: MachineEntry, route_id: str) -> str:
         for route in entry.config.routes:
             if route.id == route_id:
@@ -263,6 +287,10 @@ class Controller:
         for entry in self._registry.entries():
             if entry.machine.is_busy or entry.id in self._queue_machines():
                 await self.emergency_stop(entry.id)
+        # Прерванные поливы только что попали в журнал: дать записям дойти до базы.
+        pending = [task for task in self._background if not task.done()]
+        if pending:
+            await asyncio.wait(pending, timeout=2)
 
     def _queue_machines(self) -> set[str]:
         return {request.machine_id for request in self.queue.running()}
@@ -326,6 +354,18 @@ class Controller:
             except Exception:
                 log.exception("health check failed")
             await asyncio.sleep(interval)
+
+    # --- Журнал ---
+
+    def _save_to_journal(self, request: WateringRequest) -> None:
+        if self._journal is not None:
+            self._spawn(self._write_journal(self._journal, request))
+
+    async def _write_journal(self, journal: Journal, request: WateringRequest) -> None:
+        try:
+            await journal.save_watering(request)
+        except Exception:
+            log.exception("cannot save watering %s to the journal", request.id)
 
     # --- Фоновые задачи ---
 

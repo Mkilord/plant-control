@@ -114,6 +114,13 @@ async def test_recent_manual_watering_skips_the_slot(clock: FakeClock) -> None:
     assert queue.queued() == []
     assert [reason for _, reason in report.skipped] == ["recently_watered"]
     assert notifier.sent == [EventKind.SCHEDULE_SKIPPED]
+    # Пропуск виден в журнале, с дозой из расписания.
+    [skipped] = queue.history()
+    assert (skipped.state.value, skipped.error, skipped.dose_ml) == (
+        "skipped",
+        "recently_watered",
+        120,
+    )
     # Срок отмечен: к нему больше не вернёмся.
     assert item.last_run_at == MONDAY_8
 

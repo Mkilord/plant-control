@@ -15,6 +15,7 @@ from plant_control_addon.notifications import (
     HaEventSink,
     NoPushTargetsError,
     PushNotifier,
+    human_error,
     message_for,
     title_for,
 )
@@ -33,23 +34,23 @@ def event(kind: EventKind, **data: Any) -> Event:
 
 def test_texts_name_the_machine_and_the_plant() -> None:
     done = message_for(event(EventKind.WATERING_DONE, route_id="Монстера", dose_ml=120.4))
-    assert done == "Фикус: полито «Монстера», 120 мл."
+    assert done == "🪴 Фикус: полили «Монстера», 120 мл."
 
     failed = message_for(
         event(EventKind.WATERING_FAILED, route_id="Монстера", error="нет связи с реле")
     )
-    assert failed == "Фикус: не удалось полить «Монстера». нет связи с реле"
+    assert failed == "🥀 Фикус: не удалось полить «Монстера» - нет связи с реле."
 
     opened = message_for(event(EventKind.PROBLEM_OPENED, problem="tank_empty", details="0 мл"))
-    assert opened == "Фикус: в баке нет воды (0 мл)."
+    assert opened == "Фикус: в баке нет воды. 0 мл"
 
     closed = message_for(event(EventKind.PROBLEM_CLOSED, problem="tank_empty"))
-    assert closed == "Фикус: в баке нет воды - больше не наблюдается."
+    assert closed == "👌 Фикус: в баке нет воды - больше не мешает."
 
     skipped = message_for(
         event(EventKind.SCHEDULE_SKIPPED, route_id="Монстера", reason="recently_watered")
     )
-    assert skipped == "Фикус: полив «Монстера» пропущен, полив уже был недавно."
+    assert skipped == "🗓️ Фикус: «Монстера» не поливаем - полив уже был недавно."
 
 
 # --- Адаптеры ---
@@ -65,8 +66,8 @@ async def test_push_goes_to_every_phone_with_the_app(gateway: FakeGateway) -> No
     services = [sent["service"] for sent in gateway.notifications]
     assert services == ["notify.mobile_app_phone", "notify.mobile_app_tablet"]
     sent = gateway.notifications[0]
-    assert sent["title"] == "Полив не удался"
-    assert sent["message"] == "Фикус: не удалось полить «main». boom"
+    assert sent["title"] == "❌ Полив не удался"
+    assert sent["message"] == "🥀 Фикус: не удалось полить «main» - boom."
     data = sent["data"]
     # Повтор той же беды заменяет прежний пуш, а не копит их.
     assert data["tag"] == "plant_control_m-1_watering_failed"
@@ -200,7 +201,7 @@ def test_custom_texts_work_only_in_advanced_mode() -> None:
     plain = NotificationSettings(texts=texts).custom_texts()
     advanced = NotificationSettings(texts=texts, advanced=True).custom_texts()
 
-    assert title_for(done, plain) == "Полив выполнен"
+    assert title_for(done, plain) == "💧 Полито"
     assert title_for(done, advanced) == "Готово"
     assert message_for(done, advanced, "Europe/Moscow") == "«Монстера» полито в 15:00"
 
@@ -208,6 +209,9 @@ def test_custom_texts_work_only_in_advanced_mode() -> None:
 def test_empty_details_leave_no_brackets() -> None:
     opened = message_for(event(EventKind.PROBLEM_OPENED, problem="tank_empty"))
     assert opened == "Фикус: в баке нет воды."
+    assert title_for(event(EventKind.PROBLEM_OPENED, problem="tank_empty")) == (
+        "🚱 Проблема с поливом"
+    )
 
 
 # --- Через приложение ---
@@ -249,7 +253,7 @@ async def test_failed_watering_notifies(tmp_path: Path) -> None:
 
         assert any(name == "plant_control_watering_failed" for name, _ in gateway.events)
         titles = [sent["title"] for sent in gateway.notifications]
-        assert "Полив не удался" in titles
+        assert "❌ Полив не удался" in titles
 
 
 async def test_test_push_endpoint(api: httpx.AsyncClient, gateway: FakeGateway) -> None:
@@ -326,4 +330,13 @@ async def test_templates_and_preview(api: httpx.AsyncClient) -> None:
         "/api/notifications/preview",
         json={"kind": "watering_done", "text": {"title": "", "message": "Полито: {plant}"}},
     )
-    assert preview.json() == {"title": "Полив выполнен", "message": "Полито: «Монстера»"}
+    assert preview.json() == {"title": "💧 Полито", "message": "Полито: «Монстера»"}
+
+
+def test_errors_are_told_in_plain_words() -> None:
+    assert human_error(
+        "WateringBlockedError: watering is blocked: pump_entity_missing, tank_empty"
+    ) == ("полив невозможен: насос не найден в Home Assistant, в баке нет воды")
+    assert human_error("PumpControlError: relay timeout") == "не удалось переключить насос"
+    assert human_error("ValueError: strange") == "strange"
+    assert human_error("просто текст") == "просто текст"

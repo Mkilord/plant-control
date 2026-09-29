@@ -491,4 +491,4 @@ async def test_problem_appearing_while_queued_fails_the_request(tmp_path: Path) 
         assert "WateringBlockedError" in (request.error or "")
         assert gateway.commands() == []
         titles = [sent["title"] for sent in gateway.notifications]
-        assert "Полив не удался" in titles
+        assert "❌ Полив не удался" in titles

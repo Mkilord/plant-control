@@ -25,8 +25,8 @@ from plant_control.domain.power import PowerGroup, solo_group
 
 log = logging.getLogger(__name__)
 
-# Сколько выполненных заявок помнить для показа истории.
-HISTORY_LIMIT = 50
+# Сколько выполненных заявок держать в памяти для показа журнала.
+HISTORY_LIMIT = 200
 
 
 class WateringRunner(Protocol):
@@ -47,11 +47,21 @@ class RequestState(Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     EXPIRED = "expired"  # не дождалась своей очереди
+    SKIPPED = "skipped"  # расписание решило не поливать: в очередь не вставала
 
 
 FINISHED = frozenset(
-    {RequestState.DONE, RequestState.FAILED, RequestState.CANCELLED, RequestState.EXPIRED}
+    {
+        RequestState.DONE,
+        RequestState.FAILED,
+        RequestState.CANCELLED,
+        RequestState.EXPIRED,
+        RequestState.SKIPPED,
+    }
 )
+
+# Вызывается для каждой завершённой заявки: так журнал попадает в базу.
+FinishedListener = Callable[["WateringRequest"], None]
 
 
 @dataclass
@@ -101,6 +111,8 @@ class WateringQueue:
         group_of: Callable[[str], PowerGroup] | None = None,
         *,
         tick: float = 0.5,
+        history: Iterable["WateringRequest"] = (),
+        on_finished: FinishedListener | None = None,
     ) -> None:
         self._runner = runner
         self._clock = clock
@@ -109,7 +121,11 @@ class WateringQueue:
         self._tick = tick
         self._queued: list[WateringRequest] = []
         self._running: dict[str, _Running] = {}
-        self._history: list[WateringRequest] = []
+        # Журнал: сначала новые. history - то, что сохранилось с прошлого запуска.
+        self._history: list[WateringRequest] = sorted(
+            history, key=lambda r: r.finished_at or r.requested_at, reverse=True
+        )[:HISTORY_LIMIT]
+        self._on_finished = on_finished
         self._last_start: dict[str, datetime] = {}
         self._wake = asyncio.Event()
         self._next_seq = 0
@@ -137,6 +153,28 @@ class WateringQueue:
         )
         self._queued.append(request)
         self._wake.set()
+        return request
+
+    def record_skipped(
+        self,
+        machine_id: str,
+        route_id: str,
+        dose_ml: float,
+        reason: str,
+        source: RequestSource = RequestSource.SCHEDULE,
+    ) -> WateringRequest:
+        """Записать в журнал полив, который решили не делать. В очередь он не встаёт."""
+        self._next_seq += 1
+        request = WateringRequest(
+            id=uuid.uuid4().hex[:8],
+            seq=self._next_seq,
+            machine_id=machine_id,
+            route_id=route_id,
+            dose_ml=dose_ml,
+            source=source,
+            requested_at=self._clock.now(),
+        )
+        self._finish(request, RequestState.SKIPPED, reason)
         return request
 
     def cancel(self, request_id: str) -> WateringRequest:
@@ -271,6 +309,11 @@ class WateringQueue:
         request.finished_at = self._clock.now()
         self._history.insert(0, request)
         del self._history[HISTORY_LIMIT:]
+        if self._on_finished is not None:
+            try:
+                self._on_finished(request)
+            except Exception:
+                log.exception("finished listener failed for %s", request.id)
 
 
 def groups_by_machine(groups: Iterable[tuple[str, PowerGroup]]) -> Callable[[str], PowerGroup]:

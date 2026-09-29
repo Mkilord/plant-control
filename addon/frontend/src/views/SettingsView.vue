@@ -107,6 +107,11 @@ function insert(kind: EventKind, name: string) {
   item.message = `${base}${base && !base.endsWith(" ") ? " " : ""}{${name}}`;
 }
 
+function customized(kind: EventKind): boolean {
+  const item = settings.value?.texts[kind];
+  return Boolean(item && (item.title.trim() || item.message.trim()));
+}
+
 function reset(kind: EventKind) {
   settings.value!.texts[kind] = { title: "", message: "" };
 }
@@ -302,11 +307,21 @@ async function testPush() {
           </FormField>
         </div>
 
-        <div v-for="kind in EVENT_KINDS" :key="kind" class="text-block">
-          <div class="text-head">
+        <!-- Каждый вид события свёрнут: видно только название и пример. -->
+        <details v-for="kind in EVENT_KINDS" :key="kind" class="text-block">
+          <summary class="text-head">
+            <AppIcon name="back" :size="14" class="chevron" />
             <b>{{ t(`event.${kind}`) }}</b>
-            <span class="spacer" />
-            <button type="button" class="small-button" @click="reset(kind)">
+            <span v-if="customized(kind)" class="chip on">{{ t("settings.text_custom") }}</span>
+            <span class="summary-preview muted small">{{ previews[kind]?.title }}</span>
+          </summary>
+          <div class="text-actions">
+            <button
+              type="button"
+              class="small-button"
+              :disabled="!customized(kind)"
+              @click="reset(kind)"
+            >
               {{ t("settings.text_reset") }}
             </button>
           </div>
@@ -348,7 +363,7 @@ async function testPush() {
               <span>{{ previews[kind]?.message }}</span>
             </div>
           </div>
-        </div>
+        </details>
       </FormSection>
 
       <div v-if="error" class="error">{{ error }}</div>
@@ -438,7 +453,36 @@ h1 {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.text-head::-webkit-details-marker {
+  display: none;
+}
+
+.chevron {
+  transform: rotate(180deg);
+  transition: transform 0.15s;
+  color: var(--muted);
+}
+
+details[open] .chevron {
+  transform: rotate(270deg);
+}
+
+.summary-preview {
+  margin-left: auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+}
+
+.text-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: 10px 0;
 }
 
 .spacer {

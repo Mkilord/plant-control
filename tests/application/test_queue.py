@@ -249,3 +249,27 @@ async def test_run_loop_dispatches_by_itself() -> None:
         assert state(request) is RequestState.DONE
     finally:
         task.cancel()
+
+
+async def test_skipped_watering_goes_to_history_only() -> None:
+    finished: list[WateringRequest] = []
+    rig = Rig()
+    rig.queue._on_finished = finished.append
+    request = rig.queue.record_skipped("m-1", "main", 100, "recently_watered")
+
+    assert request.state is RequestState.SKIPPED
+    assert request.error == "recently_watered"
+    assert rig.queue.queued() == []
+    assert rig.queue.history() == [request]
+    assert finished == [request]
+
+
+def test_history_from_last_run_is_kept_newest_first() -> None:
+    old = WateringRequest("a", 1, "m-1", "main", 50, RequestSource.MANUAL, T0)
+    old.finished_at = T0
+    new = WateringRequest("b", 2, "m-1", "main", 50, RequestSource.MANUAL, T0)
+    new.finished_at = T0 + timedelta(hours=1)
+
+    queue = WateringQueue(Rig().queue._runner, FakeClock(T0), history=[old, new])
+
+    assert [r.id for r in queue.history()] == ["b", "a"]

@@ -20,12 +20,44 @@ log = logging.getLogger(__name__)
 # Префикс событий на шине: plant_control_watering_done и так далее.
 EVENT_PREFIX = "plant_control"
 
+# Эмодзи в начале заголовка: по значку на экране блокировки видно, что случилось.
 TITLES: dict[EventKind, str] = {
-    EventKind.WATERING_DONE: "Полив выполнен",
-    EventKind.WATERING_FAILED: "Полив не удался",
-    EventKind.PROBLEM_OPENED: "Проблема с поливом",
-    EventKind.PROBLEM_CLOSED: "Проблема решена",
-    EventKind.SCHEDULE_SKIPPED: "Полив по расписанию пропущен",
+    EventKind.WATERING_DONE: "💧 Полито",
+    EventKind.WATERING_FAILED: "❌ Полив не удался",
+    EventKind.PROBLEM_OPENED: "{emoji} Проблема с поливом",
+    EventKind.PROBLEM_CLOSED: "✅ Проблема решена",
+    EventKind.SCHEDULE_SKIPPED: "⏭️ Полив пропущен",
+}
+
+# Значок каждой проблемы: подставляется вместо {emoji}.
+PROBLEM_EMOJI: dict[str, str] = {
+    "ha_disconnected": "📡",
+    "pump_entity_missing": "🔌",
+    "valve_entity_missing": "🔌",
+    "pump_state_unknown": "❓",
+    "valve_state_unknown": "❓",
+    "pump_overrun": "🔥",
+    "tank_empty": "🚱",
+    "tank_low": "🪣",
+    "watering_failed": "❌",
+    "schedule_skipped": "⏭️",
+}
+DEFAULT_PROBLEM_EMOJI = "⚠️"
+
+# Ошибки полива человеческими словами. Ключ - класс ошибки из журнала.
+ERRORS: dict[str, str] = {
+    "WateringBlockedError": "полив невозможен",
+    "MachineBusyError": "машина уже поливает",
+    "NotEnoughWaterError": "в баке мало воды",
+    "PumpCoolingDownError": "насос ещё отдыхает после прошлого полива",
+    "PumpRuntimeExceededError": "доза не укладывается в предел работы насоса",
+    "PumpAlreadyRunningError": "насос уже работает",
+    "PumpStateUnknownError": "состояние насоса неизвестно",
+    "CollectorStateUnknownError": "состояние клапанов неизвестно",
+    "AnotherValveOpenError": "открыт другой клапан",
+    "PumpControlError": "не удалось переключить насос",
+    "ValveControlError": "не удалось переключить клапан",
+    "HomeAssistantUnavailableError": "нет связи с Home Assistant",
 }
 
 PROBLEMS: dict[str, str] = {
@@ -49,19 +81,19 @@ REASONS: dict[str, str] = {
 
 # Тексты по умолчанию. В {скобках} - подстановки, их список в PLACEHOLDERS.
 MESSAGES: dict[EventKind, str] = {
-    EventKind.WATERING_DONE: "{machine}: полито {plant}, {dose}.",
-    EventKind.WATERING_FAILED: "{machine}: не удалось полить {plant}. {error}",
-    EventKind.PROBLEM_OPENED: "{machine}: {problem} ({details}).",
-    EventKind.PROBLEM_CLOSED: "{machine}: {problem} - больше не наблюдается.",
-    EventKind.SCHEDULE_SKIPPED: "{machine}: полив {plant} пропущен, {reason}.",
+    EventKind.WATERING_DONE: "🪴 {machine}: полили {plant}, {dose}.",
+    EventKind.WATERING_FAILED: "🥀 {machine}: не удалось полить {plant} - {error}.",
+    EventKind.PROBLEM_OPENED: "{machine}: {problem}. {details}",
+    EventKind.PROBLEM_CLOSED: "👌 {machine}: {problem} - больше не мешает.",
+    EventKind.SCHEDULE_SKIPPED: "🗓️ {machine}: {plant} не поливаем - {reason}.",
 }
 
 # Какие подстановки есть у каждого вида события.
 PLACEHOLDERS: dict[EventKind, tuple[str, ...]] = {
     EventKind.WATERING_DONE: ("machine", "plant", "dose", "time"),
     EventKind.WATERING_FAILED: ("machine", "plant", "dose", "error", "time"),
-    EventKind.PROBLEM_OPENED: ("machine", "problem", "details", "time"),
-    EventKind.PROBLEM_CLOSED: ("machine", "problem", "time"),
+    EventKind.PROBLEM_OPENED: ("emoji", "machine", "problem", "details", "time"),
+    EventKind.PROBLEM_CLOSED: ("emoji", "machine", "problem", "time"),
     EventKind.SCHEDULE_SKIPPED: ("machine", "plant", "reason", "time"),
 }
 
@@ -102,12 +134,29 @@ def values_for(event: Event, timezone: str | None = None) -> dict[str, str]:
         "machine": event.machine_name,
         "plant": _plant(data),
         "dose": _dose(data),
-        "error": str(data.get("error") or ""),
+        "error": human_error(str(data.get("error") or "")),
         "problem": PROBLEMS.get(problem, problem),
+        "emoji": PROBLEM_EMOJI.get(problem, DEFAULT_PROBLEM_EMOJI),
         "details": str(data.get("details") or ""),
         "reason": REASONS.get(reason, reason),
         "time": at.strftime("%H:%M"),
     }
+
+
+def human_error(text: str) -> str:
+    """Ошибка из журнала человеческими словами.
+
+    "WateringBlockedError: watering is blocked: tank_empty" -> "полив невозможен: в баке нет воды".
+    """
+    match = re.match(r"(\w+Error):\s*(.*)", text)
+    if match is None:
+        return text
+    name, detail = match.groups()
+    if name == "WateringBlockedError":
+        kinds = detail.rpartition(":")[2].split(",")
+        reasons = [PROBLEMS.get(kind.strip(), kind.strip()) for kind in kinds if kind.strip()]
+        return f"{ERRORS[name]}: {', '.join(reasons)}" if reasons else ERRORS[name]
+    return ERRORS.get(name, detail or name)
 
 
 def render(template: str, values: dict[str, str]) -> str:
@@ -115,6 +164,8 @@ def render(template: str, values: dict[str, str]) -> str:
     text = _PLACEHOLDER.sub(lambda m: values.get(m.group(1), m.group(0)), template)
     # "({details})" без подробностей превращается в "()": убрать вместе с пробелом перед ними.
     text = re.sub(r"\s*\(\s*\)", "", text)
+    # Точка после пустой подстановки в конце: "... нет воды. " -> "... нет воды."
+    text = re.sub(r"\.\s*\.$", ".", text.strip())
     return re.sub(r"[ \t]{2,}", " ", text).strip()
 
 

@@ -120,6 +120,12 @@ h2 {
   flex: 1;
 }
 
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 .card {
   background: var(--card);
   border: 1px solid var(--border);

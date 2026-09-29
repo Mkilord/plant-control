@@ -43,6 +43,9 @@ class QueueItemOut(BaseModel):
     error: str | None = None
     # Место в очереди, считая с 1. None - заявка уже не ждёт.
     position: int | None = None
+    # Названия для показа. machine_name None - машину уже удалили.
+    machine_name: str | None = None
+    plant_name: str = ""
 
 
 class QueueOut(BaseModel):
@@ -64,8 +67,15 @@ class TickOut(BaseModel):
     skipped: list[str]
 
 
-def queue_item_out(request: QueueRequest, position: int | None = None) -> QueueItemOut:
+def queue_item_out(
+    request: QueueRequest, position: int | None = None, control: Controller | None = None
+) -> QueueItemOut:
+    machine_name, plant_name = (
+        control.names(request.machine_id, request.route_id) if control else (None, request.route_id)
+    )
     return QueueItemOut(
+        machine_name=machine_name,
+        plant_name=plant_name,
         id=request.id,
         machine_id=request.machine_id,
         route_id=request.route_id,
@@ -87,9 +97,9 @@ router = APIRouter(prefix="/api/queue", tags=["queue"])
 async def show_queue(control: Control) -> QueueOut:
     queue = control.queue
     return QueueOut(
-        running=[queue_item_out(r) for r in queue.running()],
-        queued=[queue_item_out(r, queue.position(r.id)) for r in queue.queued()],
-        history=[queue_item_out(r) for r in queue.history()],
+        running=[queue_item_out(r, control=control) for r in queue.running()],
+        queued=[queue_item_out(r, queue.position(r.id), control) for r in queue.queued()],
+        history=[queue_item_out(r, control=control) for r in queue.history()],
     )
 
 
@@ -106,13 +116,13 @@ async def submit(body: SubmitRequest, control: Control) -> QueueItemOut:
         body.dose_ml,
         max_wait=timedelta(minutes=body.max_wait_min) if body.max_wait_min else None,
     )
-    return queue_item_out(request, control.queue.position(request.id))
+    return queue_item_out(request, control.queue.position(request.id), control)
 
 
 @router.delete("/{request_id}")
 async def cancel(request_id: str, control: Control) -> QueueItemOut:
     request = control.queue.cancel(request_id)
-    return queue_item_out(request)
+    return queue_item_out(request, control=control)
 
 
 schedules_router = APIRouter(prefix="/api/schedules", tags=["schedules"])

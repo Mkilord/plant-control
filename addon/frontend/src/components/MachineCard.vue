@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { api, errorText, problemText, type Machine } from "../api";
+import { api, errorText, humanError, problemText, type Machine } from "../api";
 import { ml, time } from "../format";
 import { t } from "../i18n";
 import AppIcon from "./AppIcon.vue";
@@ -49,7 +49,7 @@ const waiting = computed(() => status.value.queue.find((item) => item.state === 
 // Проблемы всей машины: пока они открыты, не полить ни одно растение.
 // Проблема клапана мешает только своему растению - о ней скажет окно полива.
 const machineBlockers = computed(() => status.value.blockers.filter((b) => !b.route_scoped));
-const blockedText = computed(() => machineBlockers.value.map(problemText).join("; "));
+const blockedText = computed(() => machineBlockers.value.map(problemText).join(", "));
 // Растения, которые сейчас не полить из-за своего клапана.
 const blockedPlants = computed(
   () => new Set(status.value.blockers.filter((b) => b.route_scoped).map((b) => b.target)),
@@ -124,7 +124,11 @@ async function stop() {
       </RouterLink>
     </div>
 
-    <p v-if="machineBlockers.length" class="blocked small">{{ blockedText }}</p>
+    <ul v-if="machineBlockers.length" class="blocked small">
+      <li v-for="blocker in machineBlockers" :key="blocker.kind + blocker.target">
+        {{ problemText(blocker) }}
+      </li>
+    </ul>
 
     <TankGauge :tank="status.tank" />
 
@@ -148,7 +152,7 @@ async function stop() {
       <span class="muted">{{ t("card.last") }}</span>
       {{ time(status.last_watering.started_at) }}, {{ ml(status.last_watering.dose_ml) }}
       <span v-if="status.last_watering.ok" class="chip on">{{ t("card.ok") }}</span>
-      <span v-else class="chip danger" :title="status.last_watering.error ?? ''">
+      <span v-else class="chip danger" :title="humanError(status.last_watering.error)">
         {{ t("card.error") }}
       </span>
     </p>
@@ -301,6 +305,7 @@ a.chip {
 
 .blocked {
   margin: 0;
+  padding-left: 18px;
   color: var(--danger);
 }
 

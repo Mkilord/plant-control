@@ -242,3 +242,26 @@ async def test_schedule_works_with_a_broken_timezone(gateway: FakeGateway, tmp_p
 
         assert response.status_code == 200
         assert response.json()["status"]["schedules"][0]["next_run_at"] is not None
+
+
+async def test_journal_survives_restart(tmp_path: Path) -> None:
+    gateway = FakeGateway()
+    app = create_app(ha=gateway, settings=settings(), data_dir=tmp_path, mqtt=False)
+    async with running(app) as api:
+        machine_id = (await create(api, SIMPLE))["id"]
+        await api.post(f"/api/machines/{machine_id}/tank/refill", json={})
+        await api.post(
+            f"/api/machines/{machine_id}/water", json={"route_id": "main", "dose_ml": 50}
+        )
+        await wait_idle(api, machine_id)
+        for _ in range(100):
+            if (await api.get("/api/queue")).json()["history"]:
+                break
+            await asyncio.sleep(0.01)
+
+    app = create_app(ha=gateway, settings=settings(), data_dir=tmp_path, mqtt=False)
+    async with running(app) as api:
+        history = (await api.get("/api/queue")).json()["history"]
+        assert [(item["state"], item["dose_ml"]) for item in history] == [("done", 50)]
+        assert history[0]["machine_name"] == "Фикус"
+        assert history[0]["plant_name"] == "main"

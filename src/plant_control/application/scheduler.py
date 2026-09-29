@@ -100,6 +100,13 @@ class SchedulerService:
                 reason = decision.reason.value if decision.reason else ""
                 skipped.append((schedule, reason))
                 log.info("schedule %s skipped: %s", schedule.id, reason)
+                # Пропуск виден в журнале рядом с поливами: иначе непонятно, куда делся полив.
+                self._queue.record_skipped(
+                    schedule.machine_id,
+                    schedule.route_id,
+                    decision.dose_ml or schedule.dose_ml,
+                    reason,
+                )
                 await self._notify_skip(schedule, reason)
 
         return TickReport(submitted, skipped)

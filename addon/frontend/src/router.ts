@@ -2,8 +2,8 @@ import { createRouter, createWebHashHistory } from "vue-router";
 import MachineForm from "./views/MachineForm.vue";
 import MachinesView from "./views/MachinesView.vue";
 import ProblemsView from "./views/ProblemsView.vue";
-import QueueView from "./views/QueueView.vue";
 import SettingsView from "./views/SettingsView.vue";
+import WateringsView from "./views/WateringsView.vue";
 
 // Hash-роутинг (#/machines/new): адрес страницы внутри Ingress не меняется,
 // и HA не нужно знать о маршрутах интерфейса.
@@ -13,7 +13,9 @@ export const router = createRouter({
     { path: "/", component: MachinesView },
     { path: "/machines/new", component: MachineForm },
     { path: "/machines/:id", component: MachineForm, props: true },
-    { path: "/queue", component: QueueView },
+    { path: "/waterings", component: WateringsView },
+    // Старый адрес вкладки: закладки не должны ломаться.
+    { path: "/queue", redirect: "/waterings" },
     { path: "/problems", component: ProblemsView },
     { path: "/settings", component: SettingsView },
   ],

@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { t } from "../i18n";
-import { onMounted, onUnmounted, ref } from "vue";
-import { api, errorText, type Health, type Machine } from "../api";
+import { computed, onMounted, onUnmounted, ref } from "vue";
+import { api, errorText, type Machine } from "../api";
 import AppIcon from "../components/AppIcon.vue";
 import MachineCard from "../components/MachineCard.vue";
 
 const machines = ref<Machine[]>([]);
-const health = ref<Health | null>(null);
+const busyCount = computed(() => machines.value.filter((m) => m.status.busy).length);
 const error = ref("");
 const loaded = ref(false);
 
@@ -14,7 +14,7 @@ let timer: number | undefined;
 
 async function refresh() {
   try {
-    [machines.value, health.value] = await Promise.all([api.listMachines(), api.health()]);
+    machines.value = await api.listMachines();
     error.value = "";
   } catch (e) {
     error.value = errorText(e);
@@ -45,24 +45,16 @@ onUnmounted(() => window.clearTimeout(timer));
 <template>
   <div class="page">
     <div class="toolbar">
-      <h1 class="title">
-        <span class="logo"><AppIcon name="droplet" :size="18" /></span>{{ t("app.title") }}
-      </h1>
-      <span
-        v-if="health"
-        class="chip ha"
-        :class="health.home_assistant === 'connected' ? 'on' : 'danger'"
-      >
-        <span class="ha-dot" />
-        {{
-          health.home_assistant === "connected"
-            ? t("list.ha_connected")
-            : t("list.ha_status", { status: health.home_assistant })
-        }}
-      </span>
+      <div>
+        <h1>{{ t("list.title") }}</h1>
+        <p v-if="machines.length" class="muted small subtitle">
+          {{ t("list.summary", { count: machines.length, busy: busyCount }) }}
+        </p>
+      </div>
       <span class="spacer" />
-      <RouterLink class="button primary" to="/machines/new"><AppIcon name="plus" />{{ t("list.add") }}</RouterLink
-      >
+      <RouterLink class="button primary" to="/machines/new">
+        <AppIcon name="plus" />{{ t("list.add") }}
+      </RouterLink>
     </div>
 
     <div v-if="error" class="error">{{ error }}</div>
@@ -82,34 +74,8 @@ onUnmounted(() => window.clearTimeout(timer));
 </template>
 
 <style scoped>
-.title {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.logo {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  color: #fff;
-  background: linear-gradient(135deg, var(--accent-tank), var(--accent-plant));
-}
-
-.ha {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.ha-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
+.subtitle {
+  margin: 2px 0 0;
 }
 
 .empty-icon {

@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from plant_control.application.health import HealthService
 from plant_control.application.notifications import NotificationService
 from plant_control.application.ports import Sleeper
+from plant_control.application.queue import HISTORY_LIMIT
 from plant_control.application.scheduler import SchedulerService
 from plant_control.domain.problems import ProblemBoard
 from pydantic import BaseModel
@@ -104,6 +105,9 @@ def create_app(
             health_source=HaHealthSource(client, registry),
             notifications=notifications,
             queue_tick=queue_tick,
+            # Журнал поливов живёт в базе: после перезапуска история на месте.
+            journal=store,
+            history=await store.load_waterings(HISTORY_LIMIT),
         )
         scheduler = SchedulerService(
             registry,
