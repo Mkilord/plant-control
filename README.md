@@ -73,8 +73,10 @@ uv run python -m plant_control_addon
 
 ## Установка в Home Assistant
 
-Репозиторий кладётся в папку `addons` на машине с Home Assistant (например `/addons/plant_control`),
-после чего add-on появляется в Settings - Add-ons - Add-on Store как локальный. Интерфейс
+Settings - Add-ons - Add-on Store - меню справа сверху - Repositories, добавить
+`https://github.com/Mkilord/plant-control`. Add-on PlantControl появится в магазине, образ
+собирается на машине с Home Assistant. Для разработки репозиторий можно положить в папку `addons`
+(например `/addons/plant_control`), тогда add-on виден как локальный. Интерфейс
 открывается внутри Home Assistant через Ingress. Настройки и что появляется в HA - в `addon/README.md`.
 
 ## Веб-интерфейс

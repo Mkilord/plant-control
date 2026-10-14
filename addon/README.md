@@ -5,9 +5,12 @@
 
 ## Установка
 
-Add-on ставится как локальный: содержимое репозитория кладётся в папку `addons`
-на машине с Home Assistant (например `/addons/plant_control`), после чего он
-появляется в разделе Settings - Add-ons - Add-on Store как локальный add-on.
+1. Settings - Add-ons - Add-on Store - меню справа сверху - Repositories.
+2. Добавить `https://github.com/Mkilord/plant-control` и закрыть окно.
+3. Найти PlantControl в магазине и нажать Install. Образ собирается на месте,
+   на Raspberry Pi это занимает несколько минут.
+
+Обновления приходят, когда в `config.yaml` растёт `version`.
 
 Интерфейс открывается внутри Home Assistant (Ingress), отдельный порт не нужен.
 
