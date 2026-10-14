@@ -3,12 +3,11 @@
 name: PlantControl
 version: "0.1.0"
 slug: plant_control
-description: Адресный полив растений: свои машины, расписания, очередь и проблемы
+description: "Адресный полив растений: свои машины, расписания, очередь и проблемы"
 url: https://github.com/mkilord/plant-control
 arch:
   - amd64
   - aarch64
-  - armv7
 init: false
 # Интерфейс открывается внутри Home Assistant, отдельный порт наружу не нужен.
 ingress: true
