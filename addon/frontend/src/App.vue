@@ -7,6 +7,7 @@ import BrandLogo from "./components/BrandLogo.vue";
 import { LOCALES, locale, t, theme, type Theme, type MessageKey } from "./i18n";
 
 const version = __APP_VERSION__;
+const REPO_URL = "https://github.com/Mkilord/plant-control";
 const route = useRoute();
 
 // Шапка следит за тем, что важно всегда: есть ли связь с HA и открытые проблемы.
@@ -127,7 +128,9 @@ const themes: { value: Theme; icon: IconName }[] = [
     <footer class="footer">
       <div class="footer-inner">
         <span class="muted">{{ t("app.version", { version }) }}</span>
-        <span class="muted">{{ t("app.author") }}</span>
+        <a class="muted source" :href="REPO_URL" target="_blank" rel="noopener noreferrer">
+          {{ t("app.source") }}
+        </a>
         <span class="spacer" />
         <label class="lang">
           <AppIcon name="globe" :size="16" />
@@ -308,6 +311,14 @@ const themes: { value: Theme; icon: IconName }[] = [
   max-width: 1100px;
   margin: 0 auto;
   padding: 12px 16px;
+}
+
+.source {
+  text-decoration: none;
+}
+
+.source:hover {
+  text-decoration: underline;
 }
 
 .lang {

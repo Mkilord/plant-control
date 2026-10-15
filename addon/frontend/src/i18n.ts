@@ -4,7 +4,7 @@ import { ref, watch } from "vue";
 const ru = {
   "app.title": "PlantControl",
   "app.version": "Версия {version}",
-  "app.author": "Автор: Egor",
+  "app.source": "Исходный код на GitHub",
   "app.language": "Язык",
   "app.theme": "Тема",
   "theme.auto": "Как в системе",
@@ -449,7 +449,7 @@ export type MessageKey = keyof typeof ru;
 const en: Record<MessageKey, string> = {
   "app.title": "PlantControl",
   "app.version": "Version {version}",
-  "app.author": "Author: Egor",
+  "app.source": "Source code on GitHub",
   "app.language": "Language",
   "app.theme": "Theme",
   "theme.auto": "System",
