@@ -87,7 +87,13 @@ Bug reports and ideas are welcome in
 [Issues](https://github.com/Mkilord/plant-control/issues). How to build, test and
 release: [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Author
+
+Created and maintained by [Mkilord](https://github.com/Mkilord).
+
 ## License
+
+Copyright (C) 2026 Mkilord
 
 PlantControl is free software: you can redistribute it and/or modify it under the
 terms of the [GNU General Public License v3.0](LICENSE) or (at your option) any

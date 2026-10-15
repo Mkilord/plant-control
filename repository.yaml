@@ -2,3 +2,4 @@
 # Supervisor ищет этот файл в корне, а add-on находит по config.yaml.
 name: PlantControl
 url: https://github.com/Mkilord/plant-control
+maintainer: Mkilord

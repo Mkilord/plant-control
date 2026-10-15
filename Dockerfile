@@ -45,6 +45,7 @@ LABEL io.hass.name="PlantControl" \
       io.hass.type="addon" \
       io.hass.url="https://github.com/Mkilord/plant-control" \
       org.opencontainers.image.source="https://github.com/Mkilord/plant-control" \
+      org.opencontainers.image.authors="Mkilord" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
       org.opencontainers.image.version="${BUILD_VERSION}"
 

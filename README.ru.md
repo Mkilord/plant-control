@@ -89,7 +89,13 @@ PlantControl включает и выключает насосы и клапан
 [Issues](https://github.com/Mkilord/plant-control/issues). Как собрать, проверить и
 выпустить версию: [CONTRIBUTING.ru.md](CONTRIBUTING.ru.md).
 
+## Автор
+
+Автор и сопровождающий — [Mkilord](https://github.com/Mkilord).
+
 ## Лицензия
+
+Copyright (C) 2026 Mkilord
 
 PlantControl — свободная программа: её можно распространять и изменять на условиях
 [GNU General Public License версии 3](LICENSE) или (по вашему выбору) любой более

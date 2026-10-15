@@ -3,6 +3,8 @@ name = "plant-control-addon"
 version = "0.1.0"
 description = "Add-on Home Assistant для адресного полива: REST API, адаптер HA, хранилище"
 license = "GPL-3.0-or-later"
+authors = [{ name = "Mkilord" }]
+maintainers = [{ name = "Mkilord" }]
 requires-python = ">=3.13"
 dependencies = [
     "plant-control",
