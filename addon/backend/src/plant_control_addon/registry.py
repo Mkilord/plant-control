@@ -21,6 +21,8 @@ from plant_control.domain.power import PowerGroup
 from plant_control.domain.schedule import Schedule
 
 from plant_control_addon.config import (
+    FlowPointConfig,
+    FlowSuggestionState,
     MachineConfig,
     MachineState,
     ScheduleConfig,
@@ -59,6 +61,8 @@ class MachineEntry:
     # по нему расписание решает, не полили ли уже вручную.
     schedules: dict[str, Schedule] = field(default_factory=dict)
     watered_at: dict[str, datetime] = field(default_factory=dict)
+    # Предложение поправить расход после замера уровня в баке.
+    flow_suggestion: FlowSuggestionState | None = None
 
     @property
     def is_busy(self) -> bool:
@@ -88,7 +92,13 @@ class MachineRegistry:
                 # Машина важнее расписания: без расписаний она всё равно поливает по кнопке.
                 log.exception("cannot load schedules of machine %s, skipped", row.id)
                 schedules = {}
-            self._entries[row.id] = MachineEntry(row.id, config, machine, schedules=schedules)
+            self._entries[row.id] = MachineEntry(
+                row.id,
+                config,
+                machine,
+                schedules=schedules,
+                flow_suggestion=state.flow_suggestion,
+            )
 
     # --- Порт MachineRepository ---
 
@@ -107,6 +117,7 @@ class MachineRegistry:
             for route_id, schedule in entry.schedules.items()
             if schedule.last_run_at is not None
         }
+        state.flow_suggestion = entry.flow_suggestion
         return state
 
     # --- Доступ ---
@@ -187,6 +198,7 @@ class MachineRegistry:
             last_watering=old.last_watering,
             schedules=build_schedules(machine_id, config, state, self._timezone),
             watered_at=dict(old.watered_at),
+            flow_suggestion=old.flow_suggestion,
         )
         self._entries[machine_id] = entry
         await self._store.upsert(machine_id, config, self.state_for(machine_id))
@@ -223,6 +235,32 @@ class MachineRegistry:
         entry.schedules = build_schedules(machine_id, config, state, self._timezone)
         await self._store.upsert(machine_id, config, state)
         return entry
+
+    async def resolve_flow_suggestion(self, machine_id: str, apply: bool) -> MachineEntry:
+        """Принять или отклонить предложение поправить расход.
+
+        Принять - умножить расход во всех замерах маршрутов на коэффициент.
+        Задержка и дотек не меняются.
+        """
+        entry = self.entry(machine_id)
+        suggestion = entry.flow_suggestion
+        if suggestion is None:
+            return entry
+        entry.flow_suggestion = None
+        if not apply:
+            await self._store.save_state(machine_id, self.state_for(machine_id))
+            return entry
+        config = entry.config.model_copy(deep=True)
+        for route in config.routes:
+            if route.calibration is not None:
+                route.calibration.flow_points = [
+                    FlowPointConfig(
+                        tank_volume_ml=point.tank_volume_ml,
+                        flow_ml_s=point.flow_ml_s * suggestion.factor,
+                    )
+                    for point in route.calibration.flow_points
+                ]
+        return await self.update(machine_id, config)
 
     async def delete(self, machine_id: str) -> None:
         entry = self.entry(machine_id)

@@ -4,6 +4,7 @@
 поэтому хранится целиком, без разбора на таблицы.
 Настройки: ключ и значение (JSON), например настройки уведомлений.
 Журнал поливов: завершённые заявки, чтобы история переживала перезапуск.
+Журнал калибровок: все прогоны и точки замера, а не только итог.
 
 sqlite3 из стандартной библиотеки синхронный, поэтому каждый запрос уходит
 в отдельный поток через asyncio.to_thread, чтобы не блокировать цикл событий.
@@ -56,6 +57,28 @@ CREATE TABLE IF NOT EXISTS settings (
 """
 
 
+CALIBRATIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS calibrations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    machine_id TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    method TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    data TEXT NOT NULL
+)
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class StoredCalibration:
+    id: int
+    machine_id: str
+    route_id: str
+    method: str
+    created_at: datetime
+    data_json: str
+
+
 @dataclass(frozen=True, slots=True)
 class StoredMachine:
     id: str
@@ -91,6 +114,18 @@ class MachineStore:
         """Последние записи журнала, сначала новые."""
         return await asyncio.to_thread(self._load_waterings, limit)
 
+    async def save_calibration(
+        self, machine_id: str, route_id: str, method: str, data_json: str
+    ) -> int:
+        """Записать калибровку в журнал. Возвращает id записи."""
+        return await asyncio.to_thread(
+            self._save_calibration, machine_id, route_id, method, data_json
+        )
+
+    async def load_calibrations(self, machine_id: str, limit: int = 50) -> list[StoredCalibration]:
+        """Калибровки машины, сначала новые."""
+        return await asyncio.to_thread(self._load_calibrations, machine_id, limit)
+
     async def load_setting(self, key: str) -> str | None:
         """JSON настройки или None, если её ещё не сохраняли."""
         return await asyncio.to_thread(self._load_setting, key)
@@ -110,6 +145,7 @@ class MachineStore:
             db.execute(SCHEMA)
             db.execute(SETTINGS_SCHEMA)
             db.execute(WATERINGS_SCHEMA)
+            db.execute(CALIBRATIONS_SCHEMA)
 
     def _load_all(self) -> list[StoredMachine]:
         with self._connect() as db:
@@ -142,6 +178,34 @@ class MachineStore:
     def _delete(self, machine_id: str) -> None:
         with self._connect() as db:
             db.execute("DELETE FROM machines WHERE id = ?", (machine_id,))
+
+    def _save_calibration(self, machine_id: str, route_id: str, method: str, data: str) -> int:
+        now = datetime.now(UTC).isoformat()
+        with self._connect() as db:
+            cursor = db.execute(
+                """
+                INSERT INTO calibrations (machine_id, route_id, method, created_at, data)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (machine_id, route_id, method, now, data),
+            )
+            return int(cursor.lastrowid or 0)
+
+    def _load_calibrations(self, machine_id: str, limit: int) -> list[StoredCalibration]:
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT id, machine_id, route_id, method, created_at, data FROM calibrations
+                WHERE machine_id = ? ORDER BY id DESC LIMIT ?
+                """,
+                (machine_id, limit),
+            ).fetchall()
+        return [
+            StoredCalibration(
+                row[0], row[1], row[2], row[3], datetime.fromisoformat(row[4]), row[5]
+            )
+            for row in rows
+        ]
 
     def _load_setting(self, key: str) -> str | None:
         with self._connect() as db:

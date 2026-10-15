@@ -1,4 +1,5 @@
 import { createRouter, createWebHashHistory } from "vue-router";
+import CalibrationView from "./views/CalibrationView.vue";
 import MachineForm from "./views/MachineForm.vue";
 import MachinesView from "./views/MachinesView.vue";
 import ProblemsView from "./views/ProblemsView.vue";
@@ -12,6 +13,7 @@ export const router = createRouter({
   routes: [
     { path: "/", component: MachinesView },
     { path: "/machines/new", component: MachineForm },
+    { path: "/machines/:id/calibrate", component: CalibrationView, props: true },
     { path: "/machines/:id", component: MachineForm, props: true },
     { path: "/waterings", component: WateringsView },
     // Старый адрес вкладки: закладки не должны ломаться.

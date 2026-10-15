@@ -98,6 +98,21 @@ class PumpCannotDeliverError(HydraulicsError):
     pass
 
 
+class DoseTooSmallError(InvalidWateringRequestError):
+    """Доза меньше того, что само дотекает после выключения насоса."""
+
+
+# --- Калибровка ---
+
+
+class CalibrationError(HydraulicsError):
+    """Данные замера не дают посчитать расход: мало точек, время назад и так далее."""
+
+
+class RouteNotCalibratedError(HydraulicsError):
+    """Маршрут работает по калибровке, а калибровки ни у него, ни у базового нет."""
+
+
 # --- Поливальная машина ---
 
 

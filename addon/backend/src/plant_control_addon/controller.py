@@ -10,8 +10,9 @@ import contextlib
 import logging
 from collections.abc import Coroutine, Iterable
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
+from plant_control.application.actuation import Actuation
 from plant_control.application.health import HealthReport, HealthService
 from plant_control.application.notifications import Event, NotificationService
 from plant_control.application.ports import Clock, Sleeper
@@ -27,10 +28,14 @@ from plant_control.domain.problems import Problem
 from plant_control.domain.pump import PumpState
 from plant_control.domain.watering import WateringPlan
 
+from plant_control_addon.config import FlowSuggestionState
 from plant_control_addon.ha.client import EntityState
 from plant_control_addon.ha.devices import HaPumpControl, HaValveControl, ServiceCaller
 from plant_control_addon.health_source import HaHealthSource
 from plant_control_addon.registry import MachineEntry, MachineRegistry, WateringResult
+
+if TYPE_CHECKING:
+    from plant_control_addon.calibration import CalibrationManager
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +80,8 @@ class Controller:
         self._clock: Clock = clock or SystemClock()
         self._sleeper: Sleeper = sleeper or AsyncioSleeper()
         self._background: set[asyncio.Task[Any]] = set()
+        # Мастер калибровки. Подключается после создания: ему самому нужен контроллер.
+        self.calibration: CalibrationManager | None = None
         # Очередь поливов: она же следит за группами питания.
         # Сам контроллер для неё - исполнитель (метод water).
         self.queue = WateringQueue(
@@ -89,6 +96,13 @@ class Controller:
     def now(self) -> datetime:
         return self._clock.now()
 
+    async def sleep_s(self, seconds: float) -> None:
+        await self._sleeper.sleep(timedelta(seconds=seconds))
+
+    @property
+    def registry(self) -> MachineRegistry:
+        return self._registry
+
     # --- Сервисы ядра для конкретной машины ---
 
     def _ports(self, entry: MachineEntry) -> tuple[HaPumpControl, HaValveControl]:
@@ -102,6 +116,10 @@ class Controller:
             valve_lag=timedelta(seconds=entry.config.timings.valve_lag_s),
         )
         return WateringService(self._registry, pumps, valves, self._clock, self._sleeper, timings)
+
+    def actuation(self, entry: MachineEntry) -> Actuation:
+        pumps, valves = self._ports(entry)
+        return Actuation(pumps, valves, self._clock)
 
     def _safety(self, entry: MachineEntry) -> SafetyService:
         pumps, valves = self._ports(entry)
@@ -157,7 +175,13 @@ class Controller:
             raise WateringBlockedError(f"watering is blocked: {kinds}", problems)
 
     def is_busy(self, machine_id: str) -> bool:
-        """Занята, если поливает или ждёт своей очереди."""
+        """Занята, если поливает, ждёт своей очереди или калибруется."""
+        return self.is_watering(machine_id) or self.is_calibrating(machine_id)
+
+    def is_calibrating(self, machine_id: str) -> bool:
+        return self.calibration is not None and self.calibration.active_for(machine_id) is not None
+
+    def is_watering(self, machine_id: str) -> bool:
         entry = self._registry.entry(machine_id)
         if entry.is_busy:
             return True
@@ -172,6 +196,8 @@ class Controller:
         failure: Exception | None = None
         try:
             # Пока заявка ждала очереди, могло что-то сломаться: проверяем перед самым стартом.
+            if self.is_calibrating(entry.id):
+                raise MachineBusyError(f"machine {entry.id!r} is being calibrated")
             await self.ensure_can_water(entry.id, route_id)
             await self._watering(entry).water(entry.id, route_id, dose_ml)
         except asyncio.CancelledError:
@@ -244,6 +270,8 @@ class Controller:
 
     async def emergency_stop(self, machine_id: str) -> list[Exception]:
         entry = self._registry.entry(machine_id)
+        if self.calibration is not None:
+            await self.calibration.abort_machine(machine_id)
         await self._cancel_queue(machine_id)
         await self._cancel_watering(entry)
         errors = await self._safety(entry).emergency_stop(machine_id)
@@ -267,7 +295,7 @@ class Controller:
         """Долить воду. None - долить до полного."""
         entry = self._registry.entry(machine_id)
         if volume_ml is None:
-            entry.machine.tank.fill_full()
+            entry.machine.fill_tank_full()
         else:
             entry.machine.tank.fill(volume_ml)
         await self._registry.save(entry.machine)
@@ -277,11 +305,17 @@ class Controller:
         entry = self._registry.entry(machine_id)
         if entry.is_busy:
             raise MachineBusyError(f"machine {machine_id!r} is watering")
-        entry.machine.tank.set_measured_volume(volume_ml)
+        thresholds = self.calibration.settings.tuning() if self.calibration else None
+        suggestion = entry.machine.measure_tank(volume_ml, self._clock.now(), thresholds)
+        if suggestion is not None:
+            log.info("flow of %s looks off by x%.2f", machine_id, suggestion.factor)
+            entry.flow_suggestion = FlowSuggestionState.of(suggestion)
         await self._registry.save(entry.machine)
         await self._recheck()
 
     async def shutdown(self) -> None:
+        if self.calibration is not None:
+            await self.calibration.shutdown()
         for task in list(self._background):
             task.cancel()
         for entry in self._registry.entries():

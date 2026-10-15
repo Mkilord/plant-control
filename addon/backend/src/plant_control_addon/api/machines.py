@@ -5,14 +5,20 @@
 """
 
 import dataclasses
-from datetime import UTC, datetime
-from typing import Annotated
+from datetime import UTC, datetime, timedelta
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Request, status
+from plant_control.domain.errors import MachineBusyError
 from pydantic import BaseModel, Field
 
 from plant_control_addon.api.queue_routes import QueueItemOut, queue_item_out
-from plant_control_addon.config import MachineConfig, ScheduleConfig
+from plant_control_addon.config import (
+    FlowPointConfig,
+    FlowSuggestionState,
+    MachineConfig,
+    ScheduleConfig,
+)
 from plant_control_addon.controller import Controller
 from plant_control_addon.registry import MachineEntry, MachineRegistry
 
@@ -73,8 +79,30 @@ class BlockerOut(BaseModel):
     details: str
 
 
+class RouteFlowStatus(BaseModel):
+    """Чем считается полив маршрута.
+
+    source: own - свой замер, inherited - расход базового маршрута,
+    none - режим калибровки, но замера нет; advanced - паспорт насоса.
+    """
+
+    route_id: str
+    source: Literal["own", "inherited", "none", "advanced"]
+    inherited_from: str | None = None
+    flow_points: list[FlowPointConfig] = []
+    prime_s: float | None = None
+    afterflow_ml: float | None = None
+    calibrated_at: datetime | None = None
+    # Пора калибровать заново (если включено напоминание).
+    due: bool = False
+
+
 class MachineStatus(BaseModel):
     busy: bool
+    # id открытой сессии калибровки.
+    calibration_session: str | None = None
+    flows: list[RouteFlowStatus] = []
+    flow_suggestion: FlowSuggestionState | None = None
     tank: TankStatus
     pump: PumpStatus
     valves: dict[str, str]
@@ -129,6 +157,51 @@ class StopOut(BaseModel):
     errors: list[str]
 
 
+def route_flows(
+    entry: MachineEntry, now: datetime, reminder_weeks: int | None
+) -> list[RouteFlowStatus]:
+    config = entry.config
+    machine = entry.machine
+    base = config.base_route_config()
+    result: list[RouteFlowStatus] = []
+    for route in config.routes:
+        if config.flow_mode == "advanced":
+            result.append(RouteFlowStatus(route_id=route.id, source="advanced"))
+            continue
+        profile = machine.profile_for(route.id)
+        if profile is None:
+            result.append(RouteFlowStatus(route_id=route.id, source="none"))
+            continue
+        own = route.calibration is not None
+        source_route = route if own else base
+        calibrated_at = (
+            source_route.calibration.calibrated_at
+            if source_route and source_route.calibration
+            else None
+        )
+        due = (
+            reminder_weeks is not None
+            and calibrated_at is not None
+            and now - calibrated_at > timedelta(weeks=reminder_weeks)
+        )
+        result.append(
+            RouteFlowStatus(
+                route_id=route.id,
+                source="own" if own else "inherited",
+                inherited_from=None if own or base is None else base.id,
+                flow_points=[
+                    FlowPointConfig(tank_volume_ml=p.tank_volume_ml, flow_ml_s=p.flow_ml_s)
+                    for p in profile.points
+                ],
+                prime_s=profile.prime_s,
+                afterflow_ml=profile.afterflow_ml,
+                calibrated_at=calibrated_at,
+                due=due,
+            )
+        )
+    return result
+
+
 def machine_out(entry: MachineEntry, control: Controller | None = None) -> MachineOut:
     now = control.now() if control else datetime.now(UTC)
     machine = entry.machine
@@ -136,11 +209,17 @@ def machine_out(entry: MachineEntry, control: Controller | None = None) -> Machi
     pump = machine.pump
     collector = machine.collector
     last = entry.last_watering
+    manager = control.calibration if control else None
+    session = manager.active_for(entry.id) if manager else None
+    reminder = manager.settings.reminder_weeks if manager else None
     return MachineOut(
         id=entry.id,
         config=entry.config,
         status=MachineStatus(
             busy=control.is_busy(entry.id) if control else entry.is_busy,
+            calibration_session=session.id if session else None,
+            flows=route_flows(entry, now, reminder),
+            flow_suggestion=entry.flow_suggestion,
             tank=TankStatus(
                 volume_ml=tank.volume_ml,
                 usable_ml=tank.usable_volume_ml,
@@ -215,6 +294,8 @@ async def get_machine(machine_id: str, registry: Registry, control: Control) -> 
 async def update_machine(
     machine_id: str, config: MachineConfig, registry: Registry, control: Control
 ) -> MachineOut:
+    if control.is_calibrating(machine_id):
+        raise MachineBusyError(f"machine {machine_id!r} is being calibrated")
     entry = await registry.update(machine_id, config)
     # Реле могли поменяться: привести новое железо в безопасное состояние.
     await control.safe_start(machine_id)

@@ -17,8 +17,13 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Protocol
 
+from plant_control.domain.calibration import FlowProfile
 from plant_control.domain.connection import Connection, Outlet, Route
-from plant_control.domain.errors import InvalidWateringRequestError, PumpCannotDeliverError
+from plant_control.domain.errors import (
+    DoseTooSmallError,
+    InvalidWateringRequestError,
+    PumpCannotDeliverError,
+)
 from plant_control.domain.flow import FlowCurve
 from plant_control.domain.tank import Tank, TankGeometry
 
@@ -40,6 +45,10 @@ class Plumbing(Protocol):
     def requires_collector(self) -> bool: ...
 
     def extra_volumes(self, route: Route, supply_is_filled: bool) -> ExtraVolumes: ...
+
+    def supply_prime_ml(self, supply_is_filled: bool) -> float:
+        """Сколько уйдёт на заполнение общей трубки до коллектора. Без коллектора 0."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +81,9 @@ class DirectPlumbing:
         returned = route.connection.dead_volume_ml * self.back_to_tank_fraction
         return ExtraVolumes(pumped_ml=returned, consumed_ml=0.0)
 
+    def supply_prime_ml(self, supply_is_filled: bool) -> float:
+        return 0.0
+
 
 @dataclass(frozen=True, slots=True)
 class CollectorPlumbing:
@@ -92,8 +104,11 @@ class CollectorPlumbing:
         return True
 
     def extra_volumes(self, route: Route, supply_is_filled: bool) -> ExtraVolumes:
-        prime = 0.0 if supply_is_filled else self.supply.dead_volume_ml
+        prime = self.supply_prime_ml(supply_is_filled)
         return ExtraVolumes(pumped_ml=prime, consumed_ml=prime)
+
+    def supply_prime_ml(self, supply_is_filled: bool) -> float:
+        return 0.0 if supply_is_filled else self.supply.dead_volume_ml
 
 
 # --- Гидравлический контекст ---
@@ -247,4 +262,55 @@ def calculate_watering(
         flow_start_ml_s=flow_start,
         flow_end_ml_s=flow_end,
         duration_s=head_model.duration_s(hydraulics, start_volume, pumped_ml),
+    )
+
+
+def calculate_calibrated_watering(
+    *,
+    tank: Tank,
+    profile: FlowProfile,
+    dose_ml: float,
+    plumbing: Plumbing,
+    supply_is_filled: bool = False,
+) -> WateringPlan:
+    """Полив по профилю калибровки (calibration.py). Бак не меняет.
+
+    Замер сделан на выходе маршрута, поэтому трубка маршрута и её сток уже
+    учтены в prime_s и afterflow_ml. Отдельно добавляется только общая трубка
+    до коллектора, если она пустая: при калибровке она была заполнена.
+
+    Напор в профиле не участвует: в плане он нулевой.
+    """
+    if dose_ml <= 0:
+        raise InvalidWateringRequestError(f"dose_ml must be positive, got {dose_ml}")
+    by_flow_ml = dose_ml - profile.afterflow_ml
+    if by_flow_ml <= 0:
+        raise DoseTooSmallError(
+            f"dose {dose_ml:.0f} ml is not more than the afterflow {profile.afterflow_ml:.0f} ml"
+        )
+
+    supply_ml = plumbing.supply_prime_ml(supply_is_filled)
+    pumped_ml = profile.prime_ml + supply_ml + by_flow_ml
+    consumed_ml = dose_ml + supply_ml
+    tank.check_can_draw(pumped_ml)
+
+    start_volume = tank.volume_ml
+    end_volume = start_volume - pumped_ml
+    flow_start = profile.flow_at(start_volume)
+    flow_end = profile.flow_at(end_volume)
+    # Расход за полив берём в середине: при одной точке он постоянный.
+    flow_mid = profile.flow_at(start_volume - pumped_ml / 2)
+    duration_s = profile.prime_s + (supply_ml + by_flow_ml) / flow_mid
+
+    return WateringPlan(
+        dose_ml=dose_ml,
+        pumped_ml=pumped_ml,
+        consumed_ml=consumed_ml,
+        level_start_mm=tank.geometry.level_at_volume(start_volume),
+        level_end_mm=tank.geometry.level_at_volume(end_volume),
+        head_start_mm=0.0,
+        head_end_mm=0.0,
+        flow_start_ml_s=flow_start,
+        flow_end_ml_s=flow_end,
+        duration_s=duration_s,
     )

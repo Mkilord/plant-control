@@ -35,6 +35,21 @@ export interface ScheduleConfig {
   min_gap_h: number;
 }
 
+export interface FlowPoint {
+  tank_volume_ml: number;
+  flow_ml_s: number;
+}
+
+export interface RouteCalibration {
+  flow_points: FlowPoint[];
+  prime_s: number;
+  afterflow_ml: number;
+  method: "marks" | "timed" | "manual";
+  calibrated_at: string | null;
+  spread_pct: number | null;
+  record_id: number | null;
+}
+
 export interface RouteConfig {
   id: string;
   name: string;
@@ -44,16 +59,23 @@ export interface RouteConfig {
   correction: number;
   default_dose_ml: number;
   schedule: ScheduleConfig | null;
+  // Свой замер маршрута. null - наследует расход базового маршрута.
+  calibration: RouteCalibration | null;
 }
+
+// calibrated - полив по калибровке маршрутов; advanced - по паспорту насоса.
+export type FlowMode = "calibrated" | "advanced";
 
 export type HeadModel = "start" | "mid" | "stepwise";
 
 export interface MachineConfig {
   name: string;
   tank: { geometry: Geometry; reserve_ml: number };
-  pump: { entity_id: string; flow: Flow; max_runtime_s: number; cooldown_s: number };
+  pump: { entity_id: string; flow: Flow | null; max_runtime_s: number; cooldown_s: number };
   plumbing: Plumbing;
   head_model: HeadModel;
+  flow_mode: FlowMode;
+  base_route: string | null;
   routes: RouteConfig[];
   timings: { valve_lead_s: number; valve_lag_s: number };
   power_group: string;
@@ -70,8 +92,31 @@ export interface WateringResult {
   error: string | null;
 }
 
+export interface RouteFlowStatus {
+  route_id: string;
+  // own - свой замер, inherited - от базового маршрута, none - замера нет, advanced - паспорт.
+  source: "own" | "inherited" | "none" | "advanced";
+  inherited_from: string | null;
+  flow_points: FlowPoint[];
+  prime_s: number | null;
+  afterflow_ml: number | null;
+  calibrated_at: string | null;
+  due: boolean;
+}
+
+export interface FlowSuggestion {
+  factor: number;
+  expected_ml: number;
+  actual_ml: number;
+  waterings: number;
+  created_at: string;
+}
+
 export interface MachineStatus {
   busy: boolean;
+  calibration_session: string | null;
+  flows: RouteFlowStatus[];
+  flow_suggestion: FlowSuggestion | null;
   tank: {
     volume_ml: number;
     usable_ml: number;
@@ -240,6 +285,64 @@ export interface Plan {
   duration_s: number;
 }
 
+// --- Калибровка ---
+
+export type CalibrationMethod = "marks" | "timed";
+
+export interface CalibrationResult {
+  flow_ml_s: number;
+  prime_s: number;
+  afterflow_ml: number;
+  spread_pct: number | null;
+  duration_s: number;
+  warnings: string[];
+}
+
+export interface CalibrationRun {
+  index: number;
+  started_at: string;
+  tank_volume_ml: number;
+  marks: [number, number][];
+  water_started_s: number | null;
+  planned_s: number | null;
+  stop_reason: string | null;
+  stopped_after_s: number | null;
+  volume_ml: number | null;
+  result: CalibrationResult | null;
+  error: string | null;
+  excluded: boolean;
+  completed: boolean;
+}
+
+export interface CalibrationSession {
+  id: string;
+  machine_id: string;
+  route_id: string;
+  method: CalibrationMethod;
+  targets: number[];
+  state: "ready" | "running" | "awaiting_volume" | "closed";
+  elapsed_s: number | null;
+  deadline_in_s: number | null;
+  runs: CalibrationRun[];
+  result: CalibrationResult | null;
+  result_error: string | null;
+  reference_volume_ml: number | null;
+  second_level_possible: boolean;
+  has_calibration: boolean;
+}
+
+export interface CalibrationSettings {
+  min_duration_s: number;
+  max_spread_pct: number;
+  overtime_factor: number;
+  heartbeat_timeout_s: number;
+  idle_timeout_s: number;
+  tune_deviation_pct: number;
+  tune_min_waterings: number;
+  reminder_weeks: number | null;
+  second_level_min_pct: number;
+}
+
 export interface HaEntity {
   entity_id: string;
   domain: string;
@@ -376,6 +479,58 @@ export const api = {
   saveMqttSettings: (settings: MqttSettingsIn) =>
     request<MqttSettings>("PUT", "api/mqtt/settings", settings),
   mqttStatus: () => request<MqttStatus>("GET", "api/mqtt/status"),
+  // Калибровка насоса.
+  openCalibration: (
+    machineId: string,
+    routeId: string,
+    method: CalibrationMethod,
+    marksMl: number[],
+  ) =>
+    request<CalibrationSession>("POST", `api/machines/${machineId}/calibration`, {
+      route_id: routeId,
+      method,
+      marks_ml: marksMl,
+    }),
+  calibration: (sid: string) =>
+    request<CalibrationSession>("GET", `api/calibration/sessions/${sid}`),
+  calibrationHeartbeat: (sid: string) =>
+    request<CalibrationSession>("POST", `api/calibration/sessions/${sid}/heartbeat`),
+  calibrationStart: (sid: string) =>
+    request<CalibrationSession>("POST", `api/calibration/sessions/${sid}/start`),
+  calibrationRun: (sid: string, durationS: number) =>
+    request<CalibrationSession>("POST", `api/calibration/sessions/${sid}/run`, {
+      duration_s: durationS,
+    }),
+  calibrationMark: (sid: string, tS: number, volumeMl: number) =>
+    request<CalibrationSession>("POST", `api/calibration/sessions/${sid}/mark`, {
+      t_s: tS,
+      volume_ml: volumeMl,
+    }),
+  calibrationStop: (sid: string) =>
+    request<CalibrationSession>("POST", `api/calibration/sessions/${sid}/stop`),
+  calibrationVolume: (sid: string, volumeMl: number) =>
+    request<CalibrationSession>("POST", `api/calibration/sessions/${sid}/volume`, {
+      volume_ml: volumeMl,
+    }),
+  calibrationSkipVolume: (sid: string) =>
+    request<CalibrationSession>("POST", `api/calibration/sessions/${sid}/skip-volume`),
+  calibrationExclude: (sid: string, index: number, excluded: boolean) =>
+    request<CalibrationSession>("PUT", `api/calibration/sessions/${sid}/runs/${index}`, {
+      excluded,
+    }),
+  calibrationSave: (sid: string, mode: "replace" | "second_level", makeBase: boolean) =>
+    request<Machine>("POST", `api/calibration/sessions/${sid}/save`, {
+      mode,
+      make_base: makeBase,
+    }),
+  calibrationClose: (sid: string) =>
+    request<void>("DELETE", `api/calibration/sessions/${sid}`),
+  calibrationSettings: () => request<CalibrationSettings>("GET", "api/calibration/settings"),
+  saveCalibrationSettings: (settings: CalibrationSettings) =>
+    request<CalibrationSettings>("PUT", "api/calibration/settings", settings),
+  resolveFlowSuggestion: (machineId: string, apply: boolean) =>
+    request<Machine>("POST", `api/machines/${machineId}/flow-suggestion`, { apply }),
+
   testPush: () =>
     request<{ enabled: boolean; devices: string[] }>("POST", "api/notifications/test"),
 };

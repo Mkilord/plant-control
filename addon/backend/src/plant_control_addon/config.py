@@ -11,6 +11,7 @@ state_of снимает состояние обратно для сохране�
 from datetime import date, datetime, time, timedelta
 from typing import Annotated, Any, Literal, Self
 
+from plant_control.domain.calibration import FlowPoint, FlowProfile
 from plant_control.domain.collector import Collector, Valve, ValveState
 from plant_control.domain.connection import Connection, Outlet, Route
 from plant_control.domain.flow import ConstantFlow, FlowCurve, LinearFlow, TableFlow
@@ -26,6 +27,7 @@ from plant_control.domain.tank import (
     TankGeometry,
     VerticalCylinder,
 )
+from plant_control.domain.tuning import FlowSuggestion, FlowTracker
 from plant_control.domain.watering import (
     CollectorPlumbing,
     DirectPlumbing,
@@ -116,7 +118,8 @@ FlowConfig = Annotated[
 
 class PumpConfig(BaseModel):
     entity_id: str = Field(pattern=ENTITY_PATTERN)
-    flow: FlowConfig
+    # Паспортная модель расхода. Нужна только в расширенном режиме (flow_mode="advanced").
+    flow: FlowConfig | None = None
     max_runtime_s: float = Field(gt=0)
     cooldown_s: float = Field(default=0, ge=0)
 
@@ -176,6 +179,35 @@ class ConnectionConfig(BaseModel):
         return data
 
 
+class FlowPointConfig(BaseModel):
+    tank_volume_ml: float = Field(ge=0)
+    flow_ml_s: float = Field(gt=0)
+
+
+class RouteCalibrationConfig(BaseModel):
+    """Результат калибровки маршрута замером (plant_control.domain.calibration).
+
+    Одна точка расхода - расход постоянный, две - зависит от объёма в баке.
+    """
+
+    flow_points: list[FlowPointConfig] = Field(min_length=1, max_length=2)
+    prime_s: float = Field(default=0, ge=0)
+    afterflow_ml: float = Field(default=0, ge=0)
+    method: Literal["marks", "timed", "manual"] = "manual"
+    calibrated_at: datetime | None = None
+    # Разброс точек, %. None - не считался.
+    spread_pct: float | None = None
+    # Запись в журнале калибровок, из которой взят результат.
+    record_id: int | None = None
+
+    def profile(self) -> FlowProfile:
+        return FlowProfile(
+            points=tuple(FlowPoint(p.tank_volume_ml, p.flow_ml_s) for p in self.flow_points),
+            prime_s=self.prime_s,
+            afterflow_ml=self.afterflow_ml,
+        )
+
+
 class DirectPlumbingConfig(BaseModel):
     type: Literal["direct"] = "direct"
     back_to_tank_fraction: float = Field(default=0.5, ge=0, le=1)
@@ -198,8 +230,11 @@ class RouteConfig(BaseModel):
     # Реле клапана. Нужно только с коллектором.
     valve_entity_id: str | None = Field(default=None, pattern=ENTITY_PATTERN)
     connection: ConnectionConfig
-    outlet_height_mm: float
+    # Высота выхода и поправка нужны только в расширенном режиме.
+    outlet_height_mm: float = 0
     correction: float = Field(default=1.0, gt=0)
+    # Свой замер маршрута. Нет - маршрут наследует расход базового.
+    calibration: RouteCalibrationConfig | None = None
     # Доза по умолчанию: ей поливает кнопка в Home Assistant и интерфейс.
     default_dose_ml: float = Field(default=100, gt=0)
     schedule: ScheduleConfig | None = None
@@ -219,6 +254,12 @@ class MachineConfig(BaseModel):
     pump: PumpConfig
     plumbing: PlumbingConfig
     head_model: Literal["start", "mid", "stepwise"] = "mid"
+    # calibrated - полив по калибровке маршрутов; advanced - по паспорту насоса и напору.
+    # Старые машины без поля остаются на паспорте: их поведение не меняется.
+    flow_mode: Literal["calibrated", "advanced"] = "advanced"
+    # Маршрут, расход которого наследуют маршруты без своего замера.
+    # None - первый откалиброванный.
+    base_route: str | None = Field(default=None, pattern=ROUTE_ID_PATTERN)
     routes: list[RouteConfig] = Field(min_length=1)
     timings: TimingsConfig = TimingsConfig()
     # Группа питания: машины одной группы делят блок питания. Пусто - машина сама по себе.
@@ -233,6 +274,10 @@ class MachineConfig(BaseModel):
         ids = [route.id for route in self.routes]
         if len(set(ids)) != len(ids):
             raise ValueError("route ids must be unique")
+        if self.base_route is not None and self.base_route not in ids:
+            raise ValueError("base_route must be one of the routes")
+        if self.flow_mode == "advanced" and self.pump.flow is None:
+            raise ValueError("advanced flow mode needs a pump flow model")
         valves = [route.valve_entity_id for route in self.routes]
         if isinstance(self.plumbing, CollectorPlumbingConfig):
             if any(valve is None for valve in valves):
@@ -257,6 +302,38 @@ class MachineConfig(BaseModel):
                 return route.valve_entity_id
         raise KeyError(device_id)
 
+    def route(self, route_id: str) -> "RouteConfig":
+        for route in self.routes:
+            if route.id == route_id:
+                return route
+        raise KeyError(route_id)
+
+    def base_route_config(self) -> "RouteConfig | None":
+        """Откалиброванный маршрут, от которого наследуют остальные."""
+        if self.base_route is not None:
+            route = self.route(self.base_route)
+            if route.calibration is not None:
+                return route
+        return next((route for route in self.routes if route.calibration is not None), None)
+
+
+class FlowSuggestionState(BaseModel):
+    factor: float
+    expected_ml: float
+    actual_ml: float
+    waterings: int
+    created_at: datetime
+
+    @classmethod
+    def of(cls, suggestion: FlowSuggestion) -> "FlowSuggestionState":
+        return cls(
+            factor=suggestion.factor,
+            expected_ml=suggestion.expected_ml,
+            actual_ml=suggestion.actual_ml,
+            waterings=suggestion.waterings,
+            created_at=suggestion.created_at,
+        )
+
 
 class MachineState(BaseModel):
     """Состояние для хранения. tank_volume_ml=None - новый бак, считаем полным."""
@@ -269,6 +346,12 @@ class MachineState(BaseModel):
     supply_is_filled: bool = False
     # Отработанные сроки расписаний по маршрутам: чтобы не полить один срок дважды.
     schedule_runs: dict[str, datetime] = {}
+    # Автоподстройка: сколько воды по расчёту ушло с последнего замера уровня.
+    tracker_expected_ml: float = 0
+    tracker_waterings: int = 0
+    tracker_valid: bool = True
+    # Предложение поправить расход, ждёт решения человека.
+    flow_suggestion: FlowSuggestionState | None = None
 
 
 # --- Сборка домена ---
@@ -308,6 +391,29 @@ def _connection(cfg: ConnectionConfig) -> Connection:
     return Connection(cfg.length_mm, cfg.inner_diameter_mm / 2)
 
 
+def tube_volume_ml(cfg: ConnectionConfig) -> float:
+    return _connection(cfg).dead_volume_ml
+
+
+def route_profiles(config: MachineConfig) -> dict[str, FlowProfile]:
+    """Профили маршрутов: свой замер или унаследованный от базового маршрута.
+
+    Маршрут без своего замера и без базового в словарь не попадает:
+    поливать его нельзя, пока не откалибруют.
+    """
+    base = config.base_route_config()
+    base_profile = base.calibration.profile() if base and base.calibration else None
+    base_tube = tube_volume_ml(base.connection) if base else 0.0
+    profiles: dict[str, FlowProfile] = {}
+    for route in config.routes:
+        if route.calibration is not None:
+            profiles[route.id] = route.calibration.profile()
+        elif base_profile is not None:
+            delta = tube_volume_ml(route.connection) - base_tube
+            profiles[route.id] = base_profile.inherited(delta)
+    return profiles
+
+
 def _head_model(name: str) -> HeadModel:
     match name:
         case "start":
@@ -326,10 +432,12 @@ def build_machine(machine_id: str, config: MachineConfig, state: MachineState) -
     volume = capacity if state.tank_volume_ml is None else min(state.tank_volume_ml, capacity)
     tank = Tank.with_reserve(geometry, config.tank.reserve_ml, volume)
 
+    calibrated = config.flow_mode == "calibrated"
+    pump_flow = config.pump.flow
     pump = Pump(
         PUMP_ID,
         PumpPassport(
-            flow=_flow(config.pump.flow),
+            flow=None if calibrated or pump_flow is None else _flow(pump_flow),
             max_runtime=timedelta(seconds=config.pump.max_runtime_s),
             cooldown=timedelta(seconds=config.pump.cooldown_s),
         ),
@@ -364,6 +472,12 @@ def build_machine(machine_id: str, config: MachineConfig, state: MachineState) -
         routes=routes,
         collector=collector,
         supply_is_filled=state.supply_is_filled,
+        profiles=route_profiles(config) if calibrated else None,
+        flow_tracker=FlowTracker(
+            expected_ml=state.tracker_expected_ml,
+            waterings=state.tracker_waterings,
+            valid=state.tracker_valid,
+        ),
     )
 
 
@@ -379,6 +493,9 @@ def state_of(machine: WateringMachine) -> MachineState:
         pump_stopped_at=machine.pump.stopped_at,
         valve_states=valves,
         supply_is_filled=machine.supply_is_filled,
+        tracker_expected_ml=machine.flow_tracker.expected_ml,
+        tracker_waterings=machine.flow_tracker.waterings,
+        tracker_valid=machine.flow_tracker.valid,
     )
 
 

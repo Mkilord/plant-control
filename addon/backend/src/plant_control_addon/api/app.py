@@ -17,6 +17,7 @@ from plant_control.application.scheduler import SchedulerService
 from plant_control.domain.problems import ProblemBoard
 from pydantic import BaseModel
 
+from plant_control_addon.api.calibration_routes import router as calibration_router
 from plant_control_addon.api.errors import install_error_handlers
 from plant_control_addon.api.ha_routes import HaGateway
 from plant_control_addon.api.ha_routes import router as ha_router
@@ -26,6 +27,7 @@ from plant_control_addon.api.notification_routes import router as notifications_
 from plant_control_addon.api.problems import router as problems_router
 from plant_control_addon.api.queue_routes import router as queue_router
 from plant_control_addon.api.queue_routes import schedules_router
+from plant_control_addon.calibration import CalibrationManager, Hooks
 from plant_control_addon.controller import Controller, SystemClock
 from plant_control_addon.ha.client import HomeAssistantClient
 from plant_control_addon.ha.supervisor import panel_path
@@ -111,6 +113,20 @@ def create_app(
             journal=store,
             history=await store.load_waterings(HISTORY_LIMIT),
         )
+        calibration = CalibrationManager(
+            registry,
+            store,
+            Hooks(
+                actuation=controller.actuation,
+                ensure_can_water=controller.ensure_can_water,
+                is_watering=controller.is_watering,
+                now=clock.now,
+                sleep=controller.sleep_s,
+            ),
+        )
+        await calibration.load()
+        controller.calibration = calibration
+        app.state.calibration = calibration
         scheduler = SchedulerService(
             registry,
             controller.queue,
@@ -169,6 +185,7 @@ def create_app(
 
     app = FastAPI(title="PlantControl", version="0.1.0", lifespan=lifespan)
     install_error_handlers(app)
+    app.include_router(calibration_router)
     app.include_router(ha_router)
     app.include_router(machines_router)
     app.include_router(mqtt_router)

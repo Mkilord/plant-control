@@ -66,6 +66,33 @@ const pumpChip = computed(() => {
   }
 });
 
+// Калибровка: идёт сейчас, не хватает замера, пора повторить.
+const calibrating = computed(() => status.value.calibration_session !== null);
+const needsCalibration = computed(() => status.value.flows.some((f) => f.source === "none"));
+const calibrationDue = computed(() => status.value.flows.some((f) => f.due));
+const suggestion = computed(() => status.value.flow_suggestion);
+const suggestionText = computed(() => {
+  const s = suggestion.value;
+  if (!s) return "";
+  const pct = Math.round(Math.abs(s.factor - 1) * 100);
+  return t(s.factor > 1 ? "calib.suggest_more" : "calib.suggest_less", {
+    pct,
+    actual: ml(s.actual_ml),
+    expected: ml(s.expected_ml),
+    n: s.waterings,
+  });
+});
+
+async function resolveSuggestion(apply: boolean) {
+  error.value = "";
+  try {
+    await api.resolveFlowSuggestion(props.machine.id, apply);
+  } catch (e) {
+    error.value = errorText(e);
+  }
+  emit("changed");
+}
+
 async function stop() {
   error.value = "";
   try {
@@ -100,9 +127,26 @@ async function stop() {
     </header>
 
     <div class="chips">
-      <span v-if="status.busy" class="chip on pulse">
+      <span v-if="calibrating" class="chip on pulse">
+        <AppIcon name="pump" :size="12" /> {{ t("calib.chip_running") }}
+      </span>
+      <span v-else-if="status.busy" class="chip on pulse">
         <AppIcon name="droplet" :size="12" /> {{ t("card.watering") }}
       </span>
+      <RouterLink
+        v-if="needsCalibration && !calibrating"
+        :to="`/machines/${machine.id}/calibrate`"
+        class="chip warn"
+      >
+        <AppIcon name="alert" :size="12" /> {{ t("calib.chip_needed") }}
+      </RouterLink>
+      <RouterLink
+        v-else-if="calibrationDue && !calibrating"
+        :to="`/machines/${machine.id}/calibrate`"
+        class="chip warn"
+      >
+        <AppIcon name="clock" :size="12" /> {{ t("calib.chip_due") }}
+      </RouterLink>
       <span v-if="waiting" class="chip">
         <AppIcon name="clock" :size="12" />
         {{
@@ -129,6 +173,14 @@ async function stop() {
         {{ problemText(blocker) }}
       </li>
     </ul>
+
+    <div v-if="suggestion" class="suggestion small">
+      <p>{{ suggestionText }}</p>
+      <div class="row">
+        <button class="primary" @click="resolveSuggestion(true)">{{ t("calib.suggest_apply") }}</button>
+        <button @click="resolveSuggestion(false)">{{ t("calib.suggest_dismiss") }}</button>
+      </div>
+    </div>
 
     <TankGauge :tank="status.tank" />
 
@@ -179,6 +231,13 @@ async function stop() {
       <button @click="showSchedule = true">
         <AppIcon name="clock" />{{ t("card.schedule") }}
       </button>
+      <RouterLink
+        class="button"
+        :to="`/machines/${machine.id}/calibrate`"
+        :title="t('calib.title')"
+      >
+        <AppIcon name="pump" />{{ t("calib.button") }}
+      </RouterLink>
       <span class="spacer" />
       <button class="danger" :class="{ solid: status.busy }" @click="stop">
         <AppIcon name="stop" :size="16" />{{ t("card.stop") }}
@@ -350,5 +409,16 @@ a.chip {
 
 .spacer {
   flex: 1;
+}
+
+.suggestion {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+
+.suggestion p {
+  margin: 0 0 8px;
 }
 </style>

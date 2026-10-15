@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from plant_control.domain.calibration import FlowPoint, FlowProfile
 from plant_control.domain.collector import Collector, Valve
 from plant_control.domain.connection import Connection, Outlet, Route
 from plant_control.domain.errors import (
@@ -14,6 +15,7 @@ from plant_control.domain.errors import (
     NotEnoughWaterError,
     PumpAlreadyRunningError,
     PumpRuntimeExceededError,
+    RouteNotCalibratedError,
     UnknownRouteError,
     UnknownValveError,
 )
@@ -224,3 +226,86 @@ def test_machine_does_not_plan_when_valve_is_open(pump: Pump) -> None:
     machine.collector.mark_opened("v1")
     with pytest.raises(AnotherValveOpenError):
         machine.plan_watering("v2", 100, T0)
+
+
+# --- Режим калибровки ---
+
+
+def calibrated_machine(profiles: dict[str, FlowProfile]) -> WateringMachine:
+    passport = PumpPassport(flow=None, max_runtime=timedelta(seconds=600), cooldown=timedelta(0))
+    collector = Collector("collector-1", [Valve("v1"), Valve("v2")])
+    return WateringMachine(
+        "machine-1",
+        pump=Pump("pump-1", passport),
+        tank=tank(),
+        head_model=MidDoseHead(),
+        plumbing=CollectorPlumbing(supply=TUBE_10ML),
+        routes={"v1": ROUTE, "v2": ROUTE},
+        collector=collector,
+        supply_is_filled=True,
+        profiles=profiles,
+    )
+
+
+PROFILE = FlowProfile(points=(FlowPoint(2000, 10),), prime_s=2, afterflow_ml=10)
+
+
+def test_calibrated_machine_plans_by_profile() -> None:
+    machine = calibrated_machine({"v1": PROFILE})
+    assert machine.uses_calibration
+    plan = machine.plan_watering("v1", 110, T0)
+    assert plan.duration_s == pytest.approx(12)
+
+
+def test_uncalibrated_route_cannot_be_watered() -> None:
+    machine = calibrated_machine({"v1": PROFILE})
+    with pytest.raises(RouteNotCalibratedError):
+        machine.plan_watering("v2", 100, T0)
+
+
+def test_pump_without_flow_needs_calibration() -> None:
+    passport = PumpPassport(flow=None, max_runtime=timedelta(seconds=60), cooldown=timedelta(0))
+    machine = simple_machine(Pump("p", passport))
+    with pytest.raises(RouteNotCalibratedError):
+        machine.plan_watering("main", 100, T0)
+
+
+def test_profiles_for_unknown_routes_are_rejected() -> None:
+    with pytest.raises(InvalidMachineError):
+        calibrated_machine({"nope": PROFILE})
+
+
+def test_measure_tank_suggests_flow_correction() -> None:
+    machine = calibrated_machine({"v1": PROFILE})
+    for _ in range(3):
+        plan = machine.plan_watering("v1", 110, T0)
+        machine.begin_watering(plan)
+        machine.complete_watering(plan)
+    # По расчёту ушло 330 мл, на деле 396.
+    computed = machine.tank.volume_ml
+    suggestion = machine.measure_tank(computed - 66, T0)
+    assert suggestion is not None
+    assert suggestion.factor == pytest.approx(1.2)
+    assert machine.flow_tracker.waterings == 0
+
+
+def test_fill_full_resets_tracker() -> None:
+    machine = calibrated_machine({"v1": PROFILE})
+    plan = machine.plan_watering("v1", 110, T0)
+    machine.begin_watering(plan)
+    machine.complete_watering(plan)
+    machine.fill_tank_full()
+    assert machine.flow_tracker.waterings == 0
+
+
+def test_calibration_run_draws_water_and_fills_supply() -> None:
+    machine = collector_machine(
+        Pump("p", PumpPassport(flow=FLOW, max_runtime=timedelta(60), cooldown=timedelta(0)))
+    )
+    before = machine.tank.volume_ml
+    machine.record_calibration_run(300)
+    assert machine.tank.volume_ml == pytest.approx(before - 300)
+    assert machine.supply_is_filled
+    # Больше, чем доступно: списываем только доступное.
+    machine.record_calibration_run(10_000)
+    assert machine.tank.usable_volume_ml == pytest.approx(0)

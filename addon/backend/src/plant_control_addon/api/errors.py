@@ -21,6 +21,7 @@ from plant_control.domain.errors import (
     PumpCoolingDownError,
     PumpError,
     PumpStateUnknownError,
+    RouteNotCalibratedError,
     TankError,
     TankOverflowError,
     UnknownRequestError,
@@ -30,6 +31,7 @@ from plant_control.domain.errors import (
     WateringBlockedError,
 )
 
+from plant_control_addon.calibration import CalibrationSessionError, UnknownSessionError
 from plant_control_addon.ha.client import HomeAssistantError
 from plant_control_addon.registry import UnknownMachineError
 
@@ -39,6 +41,9 @@ STATUS_BY_ERROR: list[tuple[type[Exception], int]] = [
     (UnknownRouteError, status.HTTP_404_NOT_FOUND),
     (UnknownValveError, status.HTTP_404_NOT_FOUND),
     (UnknownRequestError, status.HTTP_404_NOT_FOUND),
+    (UnknownSessionError, status.HTTP_404_NOT_FOUND),
+    (CalibrationSessionError, status.HTTP_409_CONFLICT),
+    (RouteNotCalibratedError, status.HTTP_409_CONFLICT),
     # Правило нарушено из-за текущего состояния: позже может получиться.
     (MachineBusyError, status.HTTP_409_CONFLICT),
     (WateringBlockedError, status.HTTP_409_CONFLICT),
@@ -60,6 +65,8 @@ STATUS_BY_ERROR: list[tuple[type[Exception], int]] = [
 
 HANDLED: tuple[type[Exception], ...] = (
     UnknownMachineError,
+    UnknownSessionError,
+    CalibrationSessionError,
     UnknownRequestError,
     PumpError,
     CollectorError,

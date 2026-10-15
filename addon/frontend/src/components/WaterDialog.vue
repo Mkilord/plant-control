@@ -86,7 +86,7 @@ function routeLabel(id: string): string {
           <td>{{ t("water.consumed") }}</td>
           <td>{{ ml(plan.consumed_ml) }}</td>
         </tr>
-        <tr>
+        <tr v-if="machine.config.flow_mode === 'advanced'">
           <td>{{ t("water.head") }}</td>
           <td>
             {{ Math.round(plan.head_start_mm) }} / {{ Math.round(plan.head_end_mm) }}

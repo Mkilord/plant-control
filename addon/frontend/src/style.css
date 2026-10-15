@@ -208,6 +208,14 @@ textarea {
   width: 100%;
 }
 
+/* Флажки и переключатели не растягиваются, как текстовые поля. */
+input[type="checkbox"],
+input[type="radio"] {
+  width: auto;
+  padding: 0;
+  flex: none;
+}
+
 input:focus,
 select:focus,
 textarea:focus {

@@ -13,8 +13,53 @@ needed.
 2. Open PlantControl from the sidebar.
 3. On the **Machines** tab create a machine: tank, pump, plants and their outlets.
    The pump and valves are picked from Home Assistant `switch` entities.
-4. Check the watering plan and water once by hand with a small dose.
-5. Add schedules to the plants.
+4. Calibrate the pump: the **Calibrate** button on the machine card.
+5. Check the watering plan and water once by hand with a small dose.
+6. Add schedules to the plants.
+
+## Pump calibration
+
+The pump flow is measured, not typed in. The calibration wizard opens from the
+**Calibrate** button on the machine card and works on a phone and on a PC.
+Put the container under the tube outlet at the plant, not under the pump: then
+the real lift height and tube length are part of the measurement.
+
+Two ways:
+
+- **By marks.** Needs a container with markings. Set a calibration volume and
+  marks, for example 500, 1000 and 1500 ml. After Start press the button each
+  time the water reaches a mark. The pump stops by itself at the last mark. Then
+  enter how much water is in the container once it stops dripping.
+- **By time.** The pump runs for a set time, the water is weighed (1 g = 1 ml) or
+  measured. Two runs of different length, for example 10 and 30 s. More precise
+  than marks and suits powerful pumps.
+
+The calibration volume does not depend on the tank size: one and a half litres
+is enough even for a tank of a ton. A run should take at least 20 seconds,
+otherwise the wizard warns that the press error is noticeable.
+
+The measurement gives the flow, the delay before the first water and how much
+drips after the stop. Watering time: the delay plus (dose minus afterflow)
+divided by the flow.
+
+Safety: the pump never runs longer than its limit, stops if the last mark does
+not come within 1.5 of the expected time, and stops if the wizard page is closed
+or the connection is lost. The machine does not water while being calibrated.
+
+With a collector it is enough to calibrate one plant. The others use its flow,
+the difference in tube volume is taken into account. Any plant can be calibrated
+separately.
+
+In a small tank the flow drops noticeably as the tank empties. Then make a
+second measurement with an almost empty tank and save it as a second level: the
+flow will depend on the volume of water in the tank.
+
+When you enter the actual tank volume, the calculation is compared with reality.
+If the flow is clearly off, the card offers to correct it. A recalibration
+reminder can be turned on under the gear.
+
+The old way (flow from the pump datasheet, outlet height, correction) stays in
+the machine form behind the "Advanced mode" checkbox.
 
 ## Interface
 

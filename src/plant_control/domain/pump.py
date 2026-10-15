@@ -30,7 +30,8 @@ class PumpPassport:
     # Поля объявляются с типом. Конструктор генерируется автоматически
     # в том же порядке: PumpPassport(flow=..., max_runtime=..., cooldown=...)
     # flow - модель расхода насоса (flow.py): постоянная, линейная или табличная.
-    flow: FlowCurve
+    # None - паспорта нет, машина считает полив по калибровке маршрутов.
+    flow: FlowCurve | None
     max_runtime: timedelta
     cooldown: timedelta
 

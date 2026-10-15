@@ -17,6 +17,7 @@ import AppIcon from "../components/AppIcon.vue";
 import FormField from "../components/FormField.vue";
 import FormSection from "../components/FormSection.vue";
 import InfoTip from "../components/InfoTip.vue";
+import CalibrationSection from "../components/CalibrationSection.vue";
 import MqttSection from "../components/MqttSection.vue";
 import { hasMessage, t } from "../i18n";
 
@@ -32,9 +33,12 @@ const saving = ref(false);
 const snapshot = ref("");
 const savedOnce = ref(false);
 const mqtt = ref<InstanceType<typeof MqttSection> | null>(null);
+const calibration = ref<InstanceType<typeof CalibrationSection> | null>(null);
 const saved = computed(
   () =>
-    savedOnce.value && JSON.stringify(settings.value) === snapshot.value && !mqtt.value?.dirty,
+    savedOnce.value && JSON.stringify(settings.value) === snapshot.value &&
+    !mqtt.value?.dirty &&
+    !calibration.value?.dirty,
 );
 const error = ref("");
 const testing = ref(false);
@@ -168,6 +172,7 @@ async function save() {
   try {
     // MQTT сохраняется, только если его правили: сохранение переподключает мост.
     await mqtt.value?.save();
+    await calibration.value?.save();
     accept(await api.saveNotificationSettings(settings.value));
     savedOnce.value = true;
     await loadDevices();
@@ -292,6 +297,9 @@ async function testPush() {
 
       <!-- MQTT -->
       <MqttSection ref="mqtt" :advanced="settings.advanced" />
+
+      <!-- Калибровка насосов -->
+      <CalibrationSection ref="calibration" :advanced="settings.advanced" />
 
       <!-- Расширенные -->
       <div class="card advanced-toggle">

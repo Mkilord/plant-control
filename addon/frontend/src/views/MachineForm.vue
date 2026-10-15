@@ -9,7 +9,9 @@ import {
   type HeadModel,
   type MachineConfig,
   type RouteConfig,
+  type RouteFlowStatus,
 } from "../api";
+import { ml, seconds } from "../format";
 import AppIcon from "../components/AppIcon.vue";
 import FormField from "../components/FormField.vue";
 import FormSection from "../components/FormSection.vue";
@@ -28,6 +30,12 @@ const saving = ref(false);
 const loading = ref(false);
 // Точки табличной модели насоса в текстовом виде: "высота расход" по строке.
 const tablePoints = ref("0 20\n400 12\n800 0");
+// Паспортная модель насоса. Редактируется отдельно от config: в режиме калибровки
+// её может не быть вовсе.
+const flow = ref<Flow>({ model: "constant", flow_ml_s: 10 });
+// Чем сейчас считается полив каждого маршрута (из статуса сохранённой машины).
+const flows = ref<RouteFlowStatus[]>([]);
+const calibrationSession = ref<string | null>(null);
 
 function defaultRoute(id: string): RouteConfig {
   return {
@@ -39,6 +47,7 @@ function defaultRoute(id: string): RouteConfig {
     correction: 1,
     default_dose_ml: 100,
     schedule: null,
+    calibration: null,
   };
 }
 
@@ -51,12 +60,14 @@ function defaultConfig(): MachineConfig {
     },
     pump: {
       entity_id: "",
-      flow: { model: "constant", flow_ml_s: 10 },
+      flow: null,
       max_runtime_s: 60,
       cooldown_s: 10,
     },
     plumbing: { type: "direct", back_to_tank_fraction: 0.5 },
     head_model: "mid",
+    flow_mode: "calibrated",
+    base_route: null,
     routes: [defaultRoute("main")],
     timings: { valve_lead_s: 0.5, valve_lag_s: 0.5 },
     power_group: "",
@@ -120,38 +131,60 @@ const tankVolumeL = computed({
 
 // --- Насос ---
 
+// Расширенный режим: полив по паспорту насоса и напору вместо калибровки.
+const advanced = computed({
+  get: () => config.value.flow_mode === "advanced",
+  set: (value: boolean) => {
+    config.value.flow_mode = value ? "advanced" : "calibrated";
+  },
+});
+
+function flowOf(routeId: string): RouteFlowStatus | undefined {
+  return flows.value.find((item) => item.route_id === routeId);
+}
+
+function flowSummary(item: RouteFlowStatus | undefined): string {
+  if (!item || item.source === "none" || !item.flow_points.length) return t("calib.status_none");
+  const flowText = `${item.flow_points[0].flow_ml_s.toFixed(1)} ${t("unit.ml_s")}`;
+  const extra = `${t("calib.prime")}: ${seconds(item.prime_s ?? 0)}, ${t("calib.afterflow")}: ${ml(item.afterflow_ml ?? 0)}`;
+  if (item.source === "inherited") {
+    return t("calib.status_inherited", { route: item.inherited_from ?? "", flow: flowText }) + `; ${extra}`;
+  }
+  return t("calib.status_own", { flow: flowText }) + `; ${extra}`;
+}
+
 const flowModel = computed({
-  get: () => config.value.pump.flow.model,
+  get: () => flow.value.model,
   set: (value: Flow["model"]) => {
     const defaults: Record<Flow["model"], Flow> = {
       constant: { model: "constant", flow_ml_s: 10 },
       linear: { model: "linear", max_flow_ml_s: 240 / 3.6, max_head_mm: 1000 },
       table: { model: "table", points: parsePoints(tablePoints.value) },
     };
-    config.value.pump.flow = defaults[value];
+    flow.value = defaults[value];
   },
 });
 
 // Производители пишут расход в л/ч и высоту в метрах. Внутри мл/с и мм.
 const qmaxLh = computed({
   get: () => {
-    const flow = config.value.pump.flow;
-    return flow.model === "linear" ? round(flow.max_flow_ml_s * 3.6, 2) : 0;
+    const current = flow.value;
+    return current.model === "linear" ? round(current.max_flow_ml_s * 3.6, 2) : 0;
   },
   set: (value: number) => {
-    const flow = config.value.pump.flow;
-    if (flow.model === "linear") flow.max_flow_ml_s = value / 3.6;
+    const current = flow.value;
+    if (current.model === "linear") current.max_flow_ml_s = value / 3.6;
   },
 });
 
 const hmaxM = computed({
   get: () => {
-    const flow = config.value.pump.flow;
-    return flow.model === "linear" ? round(flow.max_head_mm / 1000, 3) : 0;
+    const current = flow.value;
+    return current.model === "linear" ? round(current.max_head_mm / 1000, 3) : 0;
   },
   set: (value: number) => {
-    const flow = config.value.pump.flow;
-    if (flow.model === "linear") flow.max_head_mm = value * 1000;
+    const current = flow.value;
+    if (current.model === "linear") current.max_head_mm = value * 1000;
   },
 });
 
@@ -169,8 +202,8 @@ function parsePoints(text: string): [number, number][] {
 }
 
 watch(tablePoints, (text) => {
-  if (config.value.pump.flow.model === "table") {
-    config.value.pump.flow.points = parsePoints(text);
+  if (flow.value.model === "table") {
+    flow.value.points = parsePoints(text);
   }
 });
 
@@ -244,8 +277,14 @@ onMounted(async () => {
     try {
       const machine = await api.getMachine(props.id);
       config.value = machine.config;
-      if (machine.config.pump.flow.model === "table") {
-        tablePoints.value = machine.config.pump.flow.points.map((p) => p.join(" ")).join("\n");
+      flows.value = machine.status.flows;
+      calibrationSession.value = machine.status.calibration_session;
+      const loaded = machine.config.pump.flow;
+      if (loaded) {
+        flow.value = loaded;
+        if (loaded.model === "table") {
+          tablePoints.value = loaded.points.map((p) => p.join(" ")).join("\n");
+        }
       }
     } catch (e) {
       error.value = errorText(e);
@@ -259,10 +298,24 @@ async function save() {
   error.value = "";
   saving.value = true;
   try {
+    const ids = config.value.routes.map((route) => route.id);
+    const payload: MachineConfig = {
+      ...config.value,
+      pump: {
+        ...config.value.pump,
+        // В режиме калибровки паспорт не нужен, но заданный раньше не теряем.
+        flow: advanced.value || config.value.pump.flow ? flow.value : null,
+      },
+      // Код базового маршрута могли переименовать или маршрут удалить.
+      base_route:
+        config.value.base_route && ids.includes(config.value.base_route)
+          ? config.value.base_route
+          : null,
+    };
     if (props.id) {
-      await api.updateMachine(props.id, config.value);
+      await api.updateMachine(props.id, payload);
     } else {
-      await api.createMachine(config.value);
+      await api.createMachine(payload);
     }
     await router.push("/");
   } catch (e) {
@@ -470,7 +523,7 @@ async function remove() {
               placeholder="switch.pump_1"
             />
           </FormField>
-          <FormField v-slot="{ id }" class="wide" :label="t('pump.model')">
+          <FormField v-if="advanced" v-slot="{ id }" class="wide" :label="t('pump.model')">
             <select :id="id" v-model="flowModel">
               <option value="constant">{{ t("pump.model.constant") }}</option>
               <option value="linear">{{ t("pump.model.linear") }}</option>
@@ -478,22 +531,44 @@ async function remove() {
             </select>
           </FormField>
         </div>
-        <p class="note">
+        <label class="check">
+          <input v-model="advanced" type="checkbox" />
+          <span>{{ t("calib.advanced") }}</span>
+        </label>
+        <p v-if="advanced" class="note">
           <AppIcon name="info" />
-          <span>{{ t(`pump.model_hint.${config.pump.flow.model}`) }}</span>
+          <span>{{ t(`pump.model_hint.${flow.model}`) }}</span>
+        </p>
+        <div v-else class="note">
+          <AppIcon name="info" />
+          <span>
+            {{ t("calib.form_hint") }}
+            <template v-if="!isNew">
+              <RouterLink v-if="!calibrationSession" :to="`/machines/${id}/calibrate`">
+                {{ t("calib.open") }}
+              </RouterLink>
+              <RouterLink v-else :to="`/machines/${id}/calibrate`">
+                {{ t("calib.resume") }}
+              </RouterLink>
+            </template>
+            <template v-else>{{ t("calib.after_create") }}</template>
+          </span>
+        </div>
+        <p v-if="!advanced && !hasCollector && mainRoute && !isNew" class="muted small">
+          {{ flowSummary(flowOf(mainRoute.id)) }}
         </p>
 
         <div class="fields sub">
-          <template v-if="config.pump.flow.model === 'constant'">
+          <template v-if="advanced && flow.model === 'constant'">
             <NumField
-              v-model="config.pump.flow.flow_ml_s"
+              v-model="flow.flow_ml_s"
               :label="t('pump.flow')"
               :unit="t('unit.ml_s')"
               :hint="t('pump.flow_hint')"
               :min="0.01"
             />
           </template>
-          <template v-else-if="config.pump.flow.model === 'linear'">
+          <template v-else-if="advanced && flow.model === 'linear'">
             <NumField
               v-model="qmaxLh"
               :label="t('pump.qmax')"
@@ -525,7 +600,7 @@ async function remove() {
           />
         </div>
         <FormField
-          v-if="config.pump.flow.model === 'table'"
+          v-if="advanced && flow.model === 'table'"
           v-slot="{ id }"
           class="sub"
           :label="t('pump.points')"
@@ -557,26 +632,28 @@ async function remove() {
             :hint="t('tube.diameter_hint')"
             :min="0.1"
           />
-          <NumField
-            v-model="mainRoute.outlet_height_mm"
-            :label="t('tube.outlet')"
-            :unit="t('unit.mm')"
-            :hint="t('tube.outlet_hint')"
-          />
-          <NumField
-            v-model="backPercent"
-            :label="t('tube.back')"
-            :unit="t('unit.percent')"
-            :hint="t('tube.back_hint')"
-            :min="0"
-            :max="100"
-          />
-          <NumField
-            v-model="mainRoute.correction"
-            :label="t('tube.correction')"
-            :hint="t('tube.correction_hint')"
-            :min="0.01"
-          />
+          <template v-if="advanced">
+            <NumField
+              v-model="mainRoute.outlet_height_mm"
+              :label="t('tube.outlet')"
+              :unit="t('unit.mm')"
+              :hint="t('tube.outlet_hint')"
+            />
+            <NumField
+              v-model="backPercent"
+              :label="t('tube.back')"
+              :unit="t('unit.percent')"
+              :hint="t('tube.back_hint')"
+              :min="0"
+              :max="100"
+            />
+            <NumField
+              v-model="mainRoute.correction"
+              :label="t('tube.correction')"
+              :hint="t('tube.correction_hint')"
+              :min="0.01"
+            />
+          </template>
         </div>
       </FormSection>
 
@@ -675,20 +752,43 @@ async function remove() {
                 :hint="t('tube.diameter_hint')"
                 :min="0.1"
               />
-              <NumField
-                v-model="route.outlet_height_mm"
-                :label="t('tube.outlet')"
-                :unit="t('unit.mm')"
-                :hint="t('tube.outlet_hint')"
-              />
-              <NumField
-                v-model="route.correction"
-                :label="t('tube.correction')"
-                :hint="t('tube.correction_hint')"
-                :min="0.01"
-              />
+              <template v-if="advanced">
+                <NumField
+                  v-model="route.outlet_height_mm"
+                  :label="t('tube.outlet')"
+                  :unit="t('unit.mm')"
+                  :hint="t('tube.outlet_hint')"
+                />
+                <NumField
+                  v-model="route.correction"
+                  :label="t('tube.correction')"
+                  :hint="t('tube.correction_hint')"
+                  :min="0.01"
+                />
+              </template>
             </div>
+            <p v-if="!advanced && !isNew" class="muted small route-flow">
+              {{ flowSummary(flowOf(route.id)) }}
+            </p>
           </div>
+          <FormField
+            v-if="!advanced"
+            v-slot="{ id: fieldId }"
+            class="base-route"
+            :label="t('calib.base_route')"
+            :hint="t('calib.base_route_hint')"
+          >
+            <select
+              :id="fieldId"
+              :value="config.base_route ?? ''"
+              @change="config.base_route = ($event.target as HTMLSelectElement).value || null"
+            >
+              <option value="">{{ t("calib.base_auto") }}</option>
+              <option v-for="route in config.routes" :key="route.id" :value="route.id">
+                {{ route.name || route.id }}
+              </option>
+            </select>
+          </FormField>
           <button type="button" @click="addRoute"><AppIcon name="plus" />{{ t("plants.add") }}</button>
         </FormSection>
       </template>
@@ -730,7 +830,7 @@ async function remove() {
       </FormSection>
 
       <!-- Дополнительно -->
-      <details class="card advanced-card">
+      <details v-if="advanced" class="card advanced-card">
         <summary><AppIcon name="sliders" />{{ t("advanced.title") }}</summary>
         <p class="note">
           <AppIcon name="info" />
@@ -829,6 +929,23 @@ summary {
 
 .buttons {
   margin-top: 8px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  cursor: pointer;
+}
+
+.route-flow {
+  margin: 10px 0 0;
+}
+
+.base-route {
+  margin: 12px 0;
+  max-width: 420px;
 }
 
 .buttons .spacer {

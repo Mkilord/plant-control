@@ -7,16 +7,25 @@
 
 from datetime import datetime
 
+from plant_control.domain.calibration import FlowProfile
 from plant_control.domain.collector import Collector
 from plant_control.domain.connection import Route
 from plant_control.domain.errors import (
     InvalidMachineError,
     MachineBusyError,
+    RouteNotCalibratedError,
     UnknownRouteError,
 )
 from plant_control.domain.pump import Pump
 from plant_control.domain.tank import Tank
-from plant_control.domain.watering import HeadModel, Plumbing, WateringPlan, calculate_watering
+from plant_control.domain.tuning import FlowSuggestion, FlowTracker, TuningThresholds
+from plant_control.domain.watering import (
+    HeadModel,
+    Plumbing,
+    WateringPlan,
+    calculate_calibrated_watering,
+    calculate_watering,
+)
 
 
 class WateringMachine:
@@ -24,7 +33,10 @@ class WateringMachine:
     - с коллектором ключ - id клапана, который ведёт к растению;
     - без коллектора маршрут ровно один, ключ любой.
 
-    Модель расхода насоса берётся из его паспорта.
+    Два режима расчёта:
+    - по калибровке: profiles задан, у каждого маршрута свой профиль расхода
+      (свой замер или унаследованный от базового маршрута);
+    - по паспорту: profiles = None, расход из паспорта насоса, напор, обвязка.
     """
 
     def __init__(
@@ -38,6 +50,8 @@ class WateringMachine:
         routes: dict[str, Route],
         collector: Collector | None = None,
         supply_is_filled: bool = False,
+        profiles: dict[str, FlowProfile] | None = None,
+        flow_tracker: FlowTracker | None = None,
     ) -> None:
         if not routes:
             raise InvalidMachineError("machine needs at least one route")
@@ -51,6 +65,10 @@ class WateringMachine:
             for route_id in routes:
                 # Бросит UnknownValveError, если у коллектора нет такого клапана.
                 collector.valve_state(route_id)
+        if profiles is not None:
+            unknown = set(profiles) - set(routes)
+            if unknown:
+                raise InvalidMachineError(f"profiles for unknown routes: {sorted(unknown)}")
 
         self._id = machine_id
         self._pump = pump
@@ -61,6 +79,9 @@ class WateringMachine:
         self._collector = collector
         # Заполнена ли трубка от бака до коллектора. Хранится вместе с машиной.
         self._supply_is_filled = supply_is_filled
+        # None - режим паспорта. Пустой словарь - режим калибровки, но замеров ещё нет.
+        self._profiles = dict(profiles) if profiles is not None else None
+        self._flow_tracker = flow_tracker or FlowTracker()
         # Текущий полив. None - машина свободна.
         self._current: WateringPlan | None = None
 
@@ -89,6 +110,19 @@ class WateringMachine:
         return self._supply_is_filled
 
     @property
+    def uses_calibration(self) -> bool:
+        return self._profiles is not None
+
+    def profile_for(self, route_id: str) -> FlowProfile | None:
+        """Профиль расхода маршрута. None - режим паспорта или замера ещё нет."""
+        self._route(route_id)
+        return self._profiles.get(route_id) if self._profiles is not None else None
+
+    @property
+    def flow_tracker(self) -> FlowTracker:
+        return self._flow_tracker
+
+    @property
     def is_busy(self) -> bool:
         return self._current is not None
 
@@ -107,15 +141,7 @@ class WateringMachine:
         if self._collector is not None:
             self._collector.check_can_open(route_id)
 
-        plan = calculate_watering(
-            tank=self._tank,
-            flow=self._pump.passport.flow,
-            route=route,
-            dose_ml=dose_ml,
-            plumbing=self._plumbing,
-            head_model=self._head_model,
-            supply_is_filled=self._supply_is_filled,
-        )
+        plan = self._calculate(route_id, route, dose_ml)
         # Насос проверяет, можно ли ему работать столько, сколько насчитали.
         self._pump.check_can_start(now, plan.duration)
         return plan
@@ -129,6 +155,9 @@ class WateringMachine:
     def complete_watering(self, plan: WateringPlan) -> None:
         """Полив выполнен: списать воду, отметить, что трубка до коллектора полная."""
         self._tank.draw(plan.consumed_ml)
+        self._flow_tracker = self._flow_tracker.with_watering(
+            plan.consumed_ml, calibrated=self.uses_calibration
+        )
         if self._plumbing.requires_collector:
             self._supply_is_filled = True
         self._current = None
@@ -137,11 +166,64 @@ class WateringMachine:
         """Полив прерван: воду не списываем, сколько пролилось, неизвестно."""
         self._current = None
 
+    # --- Калибровка и бак ---
+
+    def record_calibration_run(self, volume_ml: float) -> None:
+        """Калибровочный прогон: списать фактически пролитое, трубка до коллектора полная."""
+        self._tank.draw(min(volume_ml, self._tank.usable_volume_ml))
+        if self._plumbing.requires_collector:
+            self._supply_is_filled = True
+
+    def measure_tank(
+        self,
+        volume_ml: float,
+        now: datetime,
+        thresholds: TuningThresholds | None = None,
+    ) -> FlowSuggestion | None:
+        """Человек сообщил фактический объём. Возвращает предложение поправить расход."""
+        computed = self._tank.volume_ml
+        self._tank.set_measured_volume(volume_ml)
+        suggestion = None
+        if self.uses_calibration:
+            suggestion = self._flow_tracker.evaluate(computed, volume_ml, now, thresholds)
+        self._flow_tracker = FlowTracker()
+        return suggestion
+
+    def fill_tank_full(self) -> None:
+        """Долили до полного "на глаз": сравнение расхода начинается заново."""
+        self._tank.fill_full()
+        self._flow_tracker = FlowTracker()
+
     def mark_supply_empty(self) -> None:
         """Трубка до коллектора опустела (бак осушили, попал воздух)."""
         self._supply_is_filled = False
 
     # --- Внутреннее ---
+
+    def _calculate(self, route_id: str, route: Route, dose_ml: float) -> WateringPlan:
+        if self._profiles is not None:
+            profile = self._profiles.get(route_id)
+            if profile is None:
+                raise RouteNotCalibratedError(f"route {route_id!r} is not calibrated")
+            return calculate_calibrated_watering(
+                tank=self._tank,
+                profile=profile,
+                dose_ml=dose_ml,
+                plumbing=self._plumbing,
+                supply_is_filled=self._supply_is_filled,
+            )
+        flow = self._pump.passport.flow
+        if flow is None:
+            raise RouteNotCalibratedError("pump has no flow model and no calibration")
+        return calculate_watering(
+            tank=self._tank,
+            flow=flow,
+            route=route,
+            dose_ml=dose_ml,
+            plumbing=self._plumbing,
+            head_model=self._head_model,
+            supply_is_filled=self._supply_is_filled,
+        )
 
     def _route(self, route_id: str) -> Route:
         try:
