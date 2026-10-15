@@ -1,0 +1,19 @@
+# В образ попадает только то, что нужно для сборки (см. Dockerfile).
+.git
+.github
+.venv
+.vscode
+.idea
+**/__pycache__
+**/*.py[cod]
+.mypy_cache
+.pytest_cache
+.ruff_cache
+**/node_modules
+addon/frontend/dist
+addon/backend/data
+addon/backend/.env
+**/.venv
+tests
+addon/backend/tests
+experiments

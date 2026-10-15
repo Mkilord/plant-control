@@ -8,8 +8,9 @@ const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), 
 
 export default defineConfig({
   plugins: [vue()],
-  // Версия приложения берётся из package.json и подставляется при сборке.
-  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
+  // Версия приложения подставляется при сборке. В образе её передаёт Dockerfile
+  // из config.yaml (APP_VERSION), при разработке берётся из package.json.
+  define: { __APP_VERSION__: JSON.stringify(process.env.APP_VERSION || pkg.version) },
   // Относительные пути: внутри Home Assistant интерфейс открывается
   // по адресу вида /api/hassio_ingress/<токен>/, заранее он неизвестен.
   base: "./",

@@ -1,0 +1,97 @@
+# Собирает готовые образы add-on'а и кладёт их в GitHub Container Registry.
+# Образ собирается, когда в main или beta появляется версия из config.yaml,
+# для которой образа ещё нет. Уже выпущенные образы не перезаписываются,
+# кроме ручного запуска с force.
+name: Builder
+
+on:
+  push:
+    branches: [main, beta]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even if the image for this version already exists
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: builder-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  info:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      image: ${{ steps.version.outputs.image }}
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Read version
+        id: version
+        run: |
+          version=$(python3 -c "import yaml; print(yaml.safe_load(open('config.yaml', encoding='utf-8'))['version'])")
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/$owner/plant-control" >> "$GITHUB_OUTPUT"
+          echo "Version: $version"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check existing image
+        id: check
+        run: |
+          tag="${{ steps.version.outputs.image }}-amd64:${{ steps.version.outputs.version }}"
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          elif docker manifest inspect "$tag" > /dev/null 2>&1; then
+            echo "Image $tag already exists, nothing to build"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: info
+    if: needs.info.outputs.build == 'true'
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: aarch64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: true
+          provenance: false
+          tags: ${{ needs.info.outputs.image }}-${{ matrix.arch }}:${{ needs.info.outputs.version }}
+          build-args: |
+            BUILD_VERSION=${{ needs.info.outputs.version }}
+            BUILD_ARCH=${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}

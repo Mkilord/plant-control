@@ -1,0 +1,9 @@
+configuration:
+  log_level:
+    name: Log level
+    description: How detailed the add-on log is.
+  timezone:
+    name: Time zone
+    description: >-
+      Time zone for schedules and quiet hours, for example Europe/Berlin.
+      Leave empty to use the Home Assistant time zone.

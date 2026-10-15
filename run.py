@@ -27,6 +27,9 @@ def load_options() -> str:
         if value is None or value == "":
             continue
         os.environ[name] = str(value).lower() if isinstance(value, bool) else str(value)
+    # Пояс не задан - берётся пояс Home Assistant: Supervisor передаёт его в TZ.
+    if "PLANT_CONTROL_TIMEZONE" not in os.environ and os.environ.get("TZ"):
+        os.environ["PLANT_CONTROL_TIMEZONE"] = os.environ["TZ"]
     level: str = options.get("log_level", "info")
     return level
 

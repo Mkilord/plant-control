@@ -1,0 +1,9 @@
+configuration:
+  log_level:
+    name: Уровень журнала
+    description: Насколько подробно add-on пишет журнал.
+  timezone:
+    name: Часовой пояс
+    description: >-
+      Часовой пояс расписаний и тихих часов, например Europe/Moscow.
+      Если оставить пустым, берётся часовой пояс Home Assistant.

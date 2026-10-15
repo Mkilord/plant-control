@@ -1,10 +1,14 @@
 # Описание add-on'а для Home Assistant.
 # Supervisor читает этот файл: имя, права, порты, настройки.
 name: PlantControl
-version: "0.1.0"
+# Версия определяет и тег готового образа. Беты - с суффиксом -beta.N.
+version: "0.1.0-beta.1"
 slug: plant_control
-description: "Адресный полив растений: свои машины, расписания, очередь и проблемы"
-url: https://github.com/mkilord/plant-control
+description: "Targeted plant watering: your own watering machines, schedules, queue and problems"
+url: https://github.com/Mkilord/plant-control
+# Готовый образ собирает GitHub Actions (.github/workflows/builder.yaml).
+# Для локальной сборки на машине с HA строку нужно закомментировать.
+image: ghcr.io/mkilord/plant-control-{arch}
 arch:
   - amd64
   - aarch64
@@ -23,7 +27,7 @@ services:
 # База машин лежит в /data: эту папку Supervisor сохраняет между обновлениями.
 options:
   log_level: info
-  timezone: Europe/Moscow
+# Часовой пояс необязателен: без него берётся пояс Home Assistant.
 schema:
   log_level: list(debug|info|warning|error)
-  timezone: str
+  timezone: str?
