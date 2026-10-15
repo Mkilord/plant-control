@@ -1,0 +1,16 @@
+name: Feature request / Предложить улучшение
+description: An idea for PlantControl / Идея для PlantControl
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to do / Что вы хотите сделать
+      description: Describe the task, not only the solution / Опишите задачу, а не только решение
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Your setup / Ваша установка
+      description: Pumps, valves, relays, tanks / Насосы, клапаны, реле, баки

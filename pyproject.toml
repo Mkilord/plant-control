@@ -3,6 +3,7 @@ name = "plant-control"
 version = "0.1.0"
 description = "Ядро адресного полива растений для Home Assistant"
 readme = "README.md"
+license = "GPL-3.0-or-later"
 requires-python = ">=3.13"
 dependencies = [
     # Часовые пояса расписаний. В Linux база берётся из системы,

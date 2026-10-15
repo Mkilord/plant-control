@@ -1,96 +1,99 @@
 # PlantControl
 
-Ядро адресного полива растений. Содержит только бизнес-логику, без зависимостей от Home Assistant. Инфраструктура подключается позже через порты.
+[![CI](https://github.com/Mkilord/plant-control/actions/workflows/ci.yaml/badge.svg)](https://github.com/Mkilord/plant-control/actions/workflows/ci.yaml)
+[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
+![Architectures](https://img.shields.io/badge/arch-amd64%20%7C%20aarch64-informational)
 
-## Структура
+**English** · [Русский](README.ru.md)
 
-- `src/plant_control/domain` - доменная модель
-  - `pump.py` - насос: паспорт с моделью расхода, остывание, предел времени работы
-  - `collector.py` - коллектор из нормально закрытых клапанов, открыт не больше одного
-  - `tank.py` - бак: форма, объем, запас под насосом
-  - `flow.py` - модели расхода насоса: постоянная, линейная, табличная
-  - `connection.py` - трубка, выход у растения, маршрут
-  - `watering.py` - расчет полива: доза, лишний объем трубок, напор, время
-  - `machine.py` - поливальная машина, корень агрегата
-  - `schedule.py` - расписание: по дням недели или каждые N дней, решение "ждать, полить, пропустить"
-  - `problems.py` - доска проблем: наблюдения, авто-открытие и авто-закрытие
-  - `power.py` - группа питания: сколько машин могут поливать разом
-- `src/plant_control/application` - порты и сервисы
-  - `watering_service.py` - сценарий полива: клапан, насос, паузы, безопасное завершение
-  - `safety_service.py` - безопасный старт, аварийная остановка, сторож насоса
-  - `pump_service.py` - ручное включение и выключение насоса
-  - `queue.py` - очередь поливов: одна машина за раз, предел по группе питания, приоритет ручных заявок
-  - `scheduler.py` - планировщик: решение расписания превращается в заявку очереди
-  - `health.py` - проверка состояния машин, из неё берутся проблемы
-  - `notifications.py` - события и правила уведомлений (виды, тихие часы)
-- `addon/backend` - бэкенд add-on'а Home Assistant: REST API, связь с HA, MQTT, уведомления
-- `addon/frontend` - веб-интерфейс на Vue 3 и TypeScript
-- `config.yaml`, `Dockerfile`, `run.py` - упаковка в add-on Home Assistant (описание в `addon/README.md`)
-- `experiments` - стенд для сравнения стратегий расчета, в ядро не входит
-- `tests` - тесты, повторяют структуру `src`
+A Home Assistant add-on for targeted plant watering. You describe your own
+watering machines — a tank, a pump, tubes and valves leading to each plant — and
+PlantControl calculates how long to run the pump for the dose you want, waters on
+a schedule, keeps a queue so machines do not overload the power supply, and stops
+watering when something is wrong.
 
-## Запуск
+From Home Assistant it only needs switches for the pumps and valves (any relay that
+shows up as a `switch` entity).
 
-```
-uv sync
-uv run pytest
-uv run mypy src tests experiments
-uv run ruff check .
-```
+## Features
 
-Стенд:
+- **Watering machines** — tank shape and volume, pump flow model (constant, linear
+  or measured table), tubes and a valve collector with one outlet open at a time.
+- **Dose-based watering** — you set millilitres, PlantControl works out the run
+  time, including water left in the tubes and pump head.
+- **Schedules** — on chosen weekdays or every N days, per plant.
+- **Queue** — one watering per machine at a time, a limit per power group, manual
+  requests go first.
+- **Problems** — unavailable pump or valve, unknown pump state, empty tank, lost
+  connection to Home Assistant. Blocking problems make watering impossible until
+  they are fixed.
+- **Push notifications** to phones through the Home Assistant Companion app, with
+  quiet hours and urgent alerts.
+- **MQTT discovery** — every machine becomes a device in Home Assistant with tank
+  level, status, last watering and a "Water" button per plant.
+- Interface in English and Russian, light and dark themes, opens inside Home
+  Assistant (Ingress).
 
-```
-uv run python -m experiments.bench
-```
+## Requirements
 
-Параметры бака, трубок и насоса для стенда задаются в словаре `BASE` в `experiments/bench.py`.
+- Home Assistant OS or Supervised (add-ons need the Supervisor).
+- An `amd64` or `aarch64` machine (Raspberry Pi 4/5 in 64-bit, x86 mini PC, etc.).
+- Relays for pumps and valves available in Home Assistant as `switch` entities.
+- Optional: the Mosquitto broker add-on for MQTT devices, the Companion app for
+  push notifications.
 
-## Бэкенд add-on'а
+## Installation
 
-Бэкенд подключается к Home Assistant через WebSocket API. Внутри add-on'а токен выдает Supervisor, при разработке адрес и токен берутся из `addon/backend/.env` (образец в `.env.example`).
+[![Add repository to my Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FMkilord%2Fplant-control)
 
-```
-cd addon/backend
-uv sync
-uv run python -m plant_control_addon
-```
+Or manually:
 
-Документация API: `http://localhost:8099/docs`. База SQLite лежит в `addon/backend/data`.
+1. In Home Assistant open **Settings → Add-ons → Add-on Store**.
+2. Menu in the top right corner → **Repositories**, add
+   `https://github.com/Mkilord/plant-control` and close the dialog.
+3. Find **PlantControl** in the store, press **Install**, then **Start**.
+4. Turn on **Show in sidebar** and open PlantControl.
 
-Основные эндпоинты:
+### Release channels
 
-- `GET/POST /api/machines`, `GET/PUT/DELETE /api/machines/{id}` - конфигурация машин
-- `POST /api/machines/{id}/plan` - расчет полива без запуска
-- `POST /api/machines/{id}/water` - полив: заявка в очередь, в ответе план и место в очереди
-- `POST /api/machines/{id}/stop` - аварийная остановка
-- `POST /api/machines/{id}/tank/refill`, `PUT /api/machines/{id}/tank/volume` - долив и измеренный объем
-- `PUT/DELETE /api/machines/{id}/routes/{route_id}/schedule` - расписание растения
-- `GET /api/schedules`, `POST /api/schedules/check` - расписания и проверка по требованию
-- `GET/POST /api/queue`, `DELETE /api/queue/{id}` - очередь поливов и отмена заявки
-- `GET /api/problems`, `POST /api/problems/check`, `.../ack`, `.../mute`, `.../unmute` - проблемы
-- `GET /api/ha/entities` - реле из Home Assistant для выбора в настройках
+| Channel | Repository URL | For whom |
+| --- | --- | --- |
+| Stable | `https://github.com/Mkilord/plant-control` | Everyday use |
+| Beta | `https://github.com/Mkilord/plant-control#beta` | Trying new features early |
 
-## Установка в Home Assistant
+Beta builds may contain bugs. Back up before switching channels. Add only one of
+the two repositories.
 
-Settings - Add-ons - Add-on Store - меню справа сверху - Repositories, добавить
-`https://github.com/Mkilord/plant-control`. Add-on PlantControl появится в магазине, образ
-собирается на машине с Home Assistant. Для разработки репозиторий можно положить в папку `addons`
-(например `/addons/plant_control`), тогда add-on виден как локальный. Интерфейс
-открывается внутри Home Assistant через Ingress. Настройки и что появляется в HA - в `addon/README.md`.
+> PlantControl has not had its first stable release yet. Until then, the stable
+> channel carries pre-release versions too.
 
-## Веб-интерфейс
+## Documentation
 
-Сборка, после которой бэкенд сам отдает интерфейс на `http://localhost:8099` (нужен `PLANT_CONTROL_STATIC_DIR=../frontend/dist` в `addon/backend/.env`):
+How to set up machines, schedules, notifications and MQTT:
+[DOCS.md](DOCS.md) (also shown on the add-on's **Documentation** tab).
 
-```
-cd addon/frontend
-npm install
-npm run build
-```
+Changes between versions: [CHANGELOG.md](CHANGELOG.md).
 
-Разработка с перезагрузкой на лету: бэкенд запущен отдельно, интерфейс открывается на `http://localhost:5173`, запросы к API проксируются на бэкенд.
+## Safety
 
-```
-npm run dev
-```
+PlantControl switches pumps and valves on and off. Software, Wi-Fi relays and
+Home Assistant itself can fail. Use hardware protection that does not depend on
+this add-on — a float switch, a pump with dry-run protection, a timer relay —
+especially for unattended watering.
+
+## Contributing
+
+Bug reports and ideas are welcome in
+[Issues](https://github.com/Mkilord/plant-control/issues). How to build, test and
+release: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+PlantControl is free software: you can redistribute it and/or modify it under the
+terms of the [GNU General Public License v3.0](LICENSE) or (at your option) any
+later version. Any modified version you distribute must be free under the same
+terms.
+
+It is distributed **as is, without any warranty**, including the implied
+warranties of merchantability or fitness for a particular purpose. See the
+license for details.

@@ -1,0 +1,32 @@
+name: Bug report / Сообщить об ошибке
+description: Something does not work as expected / Что-то работает не так
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Add-on version / Версия add-on'а
+      description: Shown at the bottom of the PlantControl page / Видна внизу страницы PlantControl
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: ha
+    attributes:
+      label: Home Assistant version / Версия Home Assistant
+      description: Settings → About / Настройки → О системе
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened / Что произошло
+      description: What you did, what you expected and what happened instead / Что вы делали, чего ждали и что получилось
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Add-on log / Журнал add-on'а
+      description: Add-on page → Log tab / Страница add-on'а → вкладка «Журнал»
+      render: text
