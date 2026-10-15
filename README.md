@@ -64,9 +64,6 @@ Or manually:
 Beta builds may contain bugs. Back up before switching channels. Add only one of
 the two repositories.
 
-> PlantControl has not had its first stable release yet. Until then, the stable
-> channel carries pre-release versions too.
-
 ## Documentation
 
 How to set up machines, schedules, notifications and MQTT:

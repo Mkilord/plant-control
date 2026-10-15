@@ -2,7 +2,7 @@
 # Supervisor читает этот файл: имя, права, порты, настройки.
 name: PlantControl
 # Версия определяет и тег готового образа. Беты - с суффиксом -beta.N.
-version: "0.1.0-beta.1"
+version: "0.1.0"
 slug: plant_control
 description: "Targeted plant watering: your own watering machines, schedules, queue and problems"
 url: https://github.com/Mkilord/plant-control

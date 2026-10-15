@@ -3,9 +3,9 @@
 All notable changes to PlantControl are listed here. Versions follow
 [Semantic Versioning](https://semver.org/); beta versions carry a `-beta.N` suffix.
 
-## 0.1.0-beta.1
+## 0.1.0
 
-First public beta.
+First stable release.
 
 - Watering machines: tank, pump with constant, linear or table flow model, tubes,
   valve collector.
