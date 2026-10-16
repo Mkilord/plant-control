@@ -4,41 +4,45 @@
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 ![Architectures](https://img.shields.io/badge/arch-amd64%20%7C%20aarch64-informational)
 
-**English** · [Русский](README.ru.md)
+**English** | [Русский](README.ru.md)
 
 A Home Assistant add-on for targeted plant watering. You describe your own
-watering machines — a tank, a pump, tubes and valves leading to each plant — and
+watering machines: a tank, a pump, tubes and valves leading to each plant.
 PlantControl calculates how long to run the pump for the dose you want, waters on
 a schedule, keeps a queue so machines do not overload the power supply, and stops
 watering when something is wrong.
 
-From Home Assistant it only needs switches for the pumps and valves (any relay that
-shows up as a `switch` entity).
+From Home Assistant it only needs switches for the pumps and valves: any relay
+that shows up as a `switch` or `input_boolean` entity.
 
 ## Features
 
-- **Watering machines** — tank shape and volume, pump flow model (constant, linear
-  or measured table), tubes and a valve collector with one outlet open at a time.
-- **Dose-based watering** — you set millilitres, PlantControl works out the run
-  time, including water left in the tubes and pump head.
-- **Schedules** — on chosen weekdays or every N days, per plant.
-- **Queue** — one watering per machine at a time, a limit per power group, manual
-  requests go first.
-- **Problems** — unavailable pump or valve, unknown pump state, empty tank, lost
-  connection to Home Assistant. Blocking problems make watering impossible until
-  they are fixed.
-- **Push notifications** to phones through the Home Assistant Companion app, with
-  quiet hours and urgent alerts.
-- **MQTT discovery** — every machine becomes a device in Home Assistant with tank
-  level, status, last watering and a "Water" button per plant.
+- **Watering machines.** Tank, pump, tubes and a valve collector. A new machine
+  is set up with a step-by-step wizard.
+- **Equipment.** Tanks, pumps, collectors and power groups are described once and
+  fit many machines. Identical machines are made by copying.
+- **On-site calibration.** The pump fills a measuring container, and the flow,
+  delay and afterflow are worked out for you. A calibration becomes stale when
+  the hardware changes.
+- **Dose-based watering.** You set millilitres, PlantControl works out the run time.
+- **Schedules.** On chosen weekdays or every N days, per plant or shared by many
+  plants.
+- **Queue and power groups.** Machines on one power supply do not start at once.
+- **Problems.** Unavailable pump or valve, empty tank, lost connection to Home
+  Assistant. Blocking problems make watering impossible until they are fixed.
+- **Push notifications** through the Home Assistant Companion app, with quiet
+  hours and urgent alerts.
+- **MQTT discovery.** Every machine becomes a device in Home Assistant.
+- **Export and import** of machines to a file.
 - Interface in English and Russian, light and dark themes, opens inside Home
   Assistant (Ingress).
 
 ## Requirements
 
 - Home Assistant OS or Supervised (add-ons need the Supervisor).
-- An `amd64` or `aarch64` machine (Raspberry Pi 4/5 in 64-bit, x86 mini PC, etc.).
-- Relays for pumps and valves available in Home Assistant as `switch` entities.
+- An `amd64` or `aarch64` machine (Raspberry Pi 4 or 5 in 64-bit, an x86 mini PC
+  and so on).
+- Relays for pumps and valves in Home Assistant.
 - Optional: the Mosquitto broker add-on for MQTT devices, the Companion app for
   push notifications.
 
@@ -48,8 +52,8 @@ shows up as a `switch` entity).
 
 Or manually:
 
-1. In Home Assistant open **Settings → Add-ons → Add-on Store**.
-2. Menu in the top right corner → **Repositories**, add
+1. In Home Assistant open **Settings**, **Add-ons**, **Add-on Store**.
+2. In the menu in the top right corner choose **Repositories**, add
    `https://github.com/Mkilord/plant-control` and close the dialog.
 3. Find **PlantControl** in the store, press **Install**, then **Start**.
 4. Turn on **Show in sidebar** and open PlantControl.
@@ -62,29 +66,30 @@ Or manually:
 | Beta | `https://github.com/Mkilord/plant-control#beta` | Trying new features early |
 | Dev | `https://github.com/Mkilord/plant-control#dev-channel` | Testing every change as soon as it lands |
 
-Beta builds may contain bugs, dev builds even more so: every push to `dev`
-becomes a new dev version. Back up before switching channels. Add only one of
-the repositories.
+Beta builds may contain bugs, dev builds even more so. Each channel installs as
+a separate add-on with its own data. Use export and import to move machines
+between channels.
 
 ## Documentation
 
-How to set up machines, schedules, notifications and MQTT:
-[DOCS.md](DOCS.md) (also shown on the add-on's **Documentation** tab).
+[How to use PlantControl](DOCS.md): machines, equipment, calibration, schedules,
+notifications and MQTT. The same text is shown on the add-on's **Documentation**
+tab.
 
-Changes between versions: [CHANGELOG.md](CHANGELOG.md).
+The [changelog](CHANGELOG.md) lists changes by version.
 
 ## Safety
 
 PlantControl switches pumps and valves on and off. Software, Wi-Fi relays and
 Home Assistant itself can fail. Use hardware protection that does not depend on
-this add-on — a float switch, a pump with dry-run protection, a timer relay —
-especially for unattended watering.
+this add-on: a float switch, a pump with dry-run protection, a timer relay.
+Especially for unattended watering.
 
 ## Contributing
 
 Bug reports and ideas are welcome in
-[Issues](https://github.com/Mkilord/plant-control/issues). How to build, test and
-release: [CONTRIBUTING.md](CONTRIBUTING.md).
+[Issues](https://github.com/Mkilord/plant-control/issues).
+[How to build, test and release](CONTRIBUTING.md).
 
 ## Author
 
