@@ -3,12 +3,24 @@ import { t } from "../i18n";
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { api, errorText, type Machine } from "../api";
 import AppIcon from "../components/AppIcon.vue";
+import ImportDialog from "../components/ImportDialog.vue";
 import MachineCard from "../components/MachineCard.vue";
+import MoreMenu from "../components/MoreMenu.vue";
+import { downloadMachines } from "../transfer";
 
 const machines = ref<Machine[]>([]);
 const busyCount = computed(() => machines.value.filter((m) => m.status.busy).length);
 const error = ref("");
 const loaded = ref(false);
+const showImport = ref(false);
+
+async function exportAll() {
+  try {
+    await downloadMachines();
+  } catch (e) {
+    error.value = errorText(e);
+  }
+}
 
 let timer: number | undefined;
 
@@ -55,7 +67,16 @@ onUnmounted(() => window.clearTimeout(timer));
       <RouterLink class="button primary" to="/machines/new">
         <AppIcon name="plus" />{{ t("list.add") }}
       </RouterLink>
+      <MoreMenu :label="t('card.more')" down>
+        <button type="button" :disabled="!machines.length" @click="exportAll">
+          <AppIcon name="download" />{{ t("transfer.export_all") }}
+        </button>
+        <button type="button" @click="showImport = true">
+          <AppIcon name="upload" />{{ t("transfer.import") }}
+        </button>
+      </MoreMenu>
     </div>
+    <ImportDialog v-if="showImport" @close="showImport = false" @changed="refresh" />
 
     <div v-if="error" class="error">{{ error }}</div>
 

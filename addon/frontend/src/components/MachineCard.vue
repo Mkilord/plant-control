@@ -6,6 +6,7 @@ import { t } from "../i18n";
 import AppIcon from "./AppIcon.vue";
 import CopyMachineDialog from "./CopyMachineDialog.vue";
 import MoreMenu from "./MoreMenu.vue";
+import { downloadMachines } from "../transfer";
 import ScheduleDialog from "./ScheduleDialog.vue";
 import TankDialog from "./TankDialog.vue";
 import TankGauge from "./TankGauge.vue";
@@ -88,6 +89,15 @@ const pumpChip = computed(() => {
       return null;
   }
 });
+// Стоп нужен, только когда что-то идёт: насос включён или его состояние неизвестно,
+// идёт полив, калибровка или заявка ждёт очереди.
+const pumpActive = computed(
+  () =>
+    status.value.pump.state !== "off" ||
+    status.value.busy ||
+    status.value.calibration_session !== null ||
+    status.value.queue.length > 0,
+);
 const lastFailed = computed(() => status.value.last_watering && !status.value.last_watering.ok);
 
 // Калибровка: идёт сейчас, не хватает замера, пора повторить.
@@ -132,6 +142,15 @@ async function resolveSuggestion(apply: boolean) {
     error.value = errorText(e);
   }
   emit("changed");
+}
+
+async function exportOne() {
+  error.value = "";
+  try {
+    await downloadMachines([props.machine.id], `plant-control-${props.machine.id}`);
+  } catch (e) {
+    error.value = errorText(e);
+  }
 }
 
 async function stop() {
@@ -323,8 +342,11 @@ async function stop() {
         <button type="button" @click="showCopy = true">
           <AppIcon name="copy" />{{ t("copy.button") }}
         </button>
+        <button type="button" @click="exportOne">
+          <AppIcon name="download" />{{ t("transfer.export_one") }}
+        </button>
       </MoreMenu>
-      <button class="danger" :class="{ solid: status.busy }" @click="stop">
+      <button v-if="pumpActive" class="danger" :class="{ solid: status.busy }" @click="stop">
         <AppIcon name="stop" :size="16" />{{ t("card.stop") }}
       </button>
     </footer>

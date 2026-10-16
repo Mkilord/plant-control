@@ -15,6 +15,7 @@ import {
   type Machine,
 } from "../api";
 import AppIcon from "../components/AppIcon.vue";
+import CalibrationHistory from "../components/CalibrationHistory.vue";
 import FormField from "../components/FormField.vue";
 import NumField from "../components/NumField.vue";
 import { ml, seconds } from "../format";
@@ -406,6 +407,8 @@ const timer = computed(() => {
         </div>
       </section>
 
+      <CalibrationHistory v-if="!session" :machine="machine" />
+
       <template v-else>
         <p class="muted">
           {{ plantName(session.route_id) }} ·
@@ -422,7 +425,7 @@ const timer = computed(() => {
                 <span v-for="m in session.targets" :key="m" class="chip">{{ ml(m) }}</span>
               </p>
               <button class="primary big" :disabled="busy" @click="startMarks">
-                <AppIcon name="play" />{{ t("calib.start_pump") }}
+                <AppIcon name="play" />{{ busy ? t("calib.starting") : t("calib.start_pump") }}
               </button>
             </template>
             <template v-else>
@@ -437,7 +440,9 @@ const timer = computed(() => {
                 />
               </div>
               <button class="primary big" :disabled="busy" @click="startTimed">
-                <AppIcon name="play" />{{ t("calib.run_for_n", { n: nextDuration }) }}
+                <AppIcon name="play" />{{
+                  busy ? t("calib.starting") : t("calib.run_for_n", { n: nextDuration })
+                }}
               </button>
             </template>
           </template>

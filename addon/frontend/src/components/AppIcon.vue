@@ -32,7 +32,9 @@ export type IconName =
   | "dots"
   | "copy"
   | "toolbox"
-  | "chevron";
+  | "chevron"
+  | "download"
+  | "upload";
 
 const PATHS: Record<IconName, string[]> = {
   droplet: ["M12 3.5c3.2 4.2 6 7.6 6 10.9a6 6 0 0 1-12 0c0-3.3 2.8-6.7 6-10.9z"],
@@ -111,6 +113,8 @@ const PATHS: Record<IconName, string[]> = {
     "M19 12m-1.2 0a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0",
   ],
   chevron: ["M6 9l6 6 6-6"],
+  download: ["M12 4v11", "M7 10.5l5 5 5-5", "M5 20h14"],
+  upload: ["M12 20V9", "M7 13.5l5-5 5 5", "M5 4h14"],
   copy: ["M9 9h11v11H9z", "M5 15H4V4h11v1"],
   toolbox: ["M3 9h18v10H3z", "M8 9V6h8v3", "M3 13.5h18", "M10 12v3M14 12v3"],
   refill: ["M12 3.5c2.6 3.4 5 6.2 5 9a5 5 0 0 1-10 0c0-2.8 2.4-5.6 5-9z", "M12 11v5", "M9.5 13.5h5"],

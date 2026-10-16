@@ -12,7 +12,16 @@ const emit = defineEmits<{ close: []; started: [] }>();
 
 const routes = computed(() => props.machine.config.routes);
 const routeId = ref(routes.value[0]?.id ?? "");
-const dose = ref(100);
+
+// Доза растения: из его расписания (общего или своего, с сезонной поправкой),
+// а без расписания - доза растения из настроек машины.
+function doseFor(id: string): number {
+  const scheduled = props.machine.status.schedules.find((s) => s.route_id === id);
+  if (scheduled) return Math.round(scheduled.dose_ml);
+  return routes.value.find((r) => r.id === id)?.default_dose_ml ?? 100;
+}
+
+const dose = ref(doseFor(routeId.value));
 const plan = ref<Plan | null>(null);
 const error = ref("");
 const busy = ref(false);
@@ -22,6 +31,11 @@ const blockers = computed(() =>
   props.machine.status.blockers.filter((b) => !b.route_scoped || b.target === routeId.value),
 );
 const blockedText = computed(() => blockers.value.map(problemText).join("; "));
+
+// Другое растение - его доза.
+watch(routeId, (id) => {
+  dose.value = doseFor(id);
+});
 
 // Любое изменение входных данных делает расчёт устаревшим.
 watch([routeId, dose], () => {

@@ -4,7 +4,8 @@
 import { onBeforeUnmount, ref, watch } from "vue";
 import AppIcon from "./AppIcon.vue";
 
-defineProps<{ label: string }>();
+// down - меню раскрывается вниз (кнопка вверху страницы), иначе вверх (низ карточки).
+withDefaults(defineProps<{ label: string; down?: boolean }>(), { down: false });
 
 const open = ref(false);
 const root = ref<HTMLElement | null>(null);
@@ -42,7 +43,7 @@ onBeforeUnmount(() => (open.value = false));
     >
       <AppIcon name="dots" :size="18" />
     </button>
-    <div v-if="open" class="menu card" role="menu" @click="open = false">
+    <div v-if="open" class="menu card" :class="{ down }" role="menu" @click="open = false">
       <slot />
     </div>
   </div>
@@ -68,6 +69,11 @@ onBeforeUnmount(() => (open.value = false));
   flex-direction: column;
   gap: 2px;
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.16);
+}
+
+.menu.down {
+  bottom: auto;
+  top: calc(100% + 6px);
 }
 
 .menu :deep(button),

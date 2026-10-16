@@ -294,6 +294,22 @@ export interface Machine {
   status: MachineStatus;
 }
 
+// --- Экспорт и импорт ---
+
+export interface ExportBundle {
+  format: "plant-control-machines";
+  version: 1;
+  exported_at: string;
+  catalog: Partial<Record<CatalogKind, Record<string, unknown>>>;
+  machines: { id: string; config: MachineConfig }[];
+}
+
+export interface ImportPlan {
+  machines: { id: string; name: string; plants: number; taken: Record<string, string> }[];
+  new_items: number;
+  reused_items: number;
+}
+
 // --- Справочники ---
 
 export type CatalogKind = "tank" | "pump" | "collector" | "schedule" | "power";
@@ -424,6 +440,15 @@ export interface CalibrationSession {
   has_calibration: boolean;
 }
 
+// Запись журнала калибровок: прогоны и итог (data.result), или "оставлена" (method accepted).
+export interface CalibrationRecord {
+  id: number;
+  route_id: string;
+  method: string;
+  created_at: string;
+  data: Record<string, unknown>;
+}
+
 export interface CalibrationSettings {
   min_duration_s: number;
   max_spread_pct: number;
@@ -537,6 +562,16 @@ export const api = {
     request<Machine>("POST", `api/machines/${id}/routes/${routeId}/calibration/accept`),
   pulse: (entityId: string, seconds = 1) =>
     request<void>("POST", `api/ha/entities/${entityId}/pulse`, { seconds }),
+
+  // Экспорт и импорт машин.
+  exportMachines: (ids?: string[]) =>
+    request<ExportBundle>(
+      "GET",
+      "api/export" + (ids?.length ? "?" + ids.map((id) => `machines=${encodeURIComponent(id)}`).join("&") : ""),
+    ),
+  previewImport: (bundle: ExportBundle) => request<ImportPlan>("POST", "api/import/preview", bundle),
+  importMachines: (bundle: ExportBundle, machines: string[] | null) =>
+    request<Machine[]>("POST", "api/import", { bundle, machines }),
 
   // Справочники.
   catalog: () => request<CatalogListing>("GET", "api/catalog"),
@@ -653,6 +688,8 @@ export const api = {
     }),
   calibrationClose: (sid: string) =>
     request<void>("DELETE", `api/calibration/sessions/${sid}`),
+  calibrationHistory: (machineId: string) =>
+    request<CalibrationRecord[]>("GET", `api/machines/${machineId}/calibrations`),
   calibrationSettings: () => request<CalibrationSettings>("GET", "api/calibration/settings"),
   saveCalibrationSettings: (settings: CalibrationSettings) =>
     request<CalibrationSettings>("PUT", "api/calibration/settings", settings),
