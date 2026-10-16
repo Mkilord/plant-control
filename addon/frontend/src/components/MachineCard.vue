@@ -309,11 +309,9 @@ async function stop() {
       >
         <AppIcon name="droplet" />{{ t("card.water") }}
       </button>
+      <button @click="showTank = true"><AppIcon name="refill" />{{ t("card.tank") }}</button>
       <span class="spacer" />
       <MoreMenu :label="t('card.more')">
-        <button type="button" @click="showTank = true">
-          <AppIcon name="refill" />{{ t("card.tank") }}
-        </button>
         <button type="button" @click="showSchedule = true">
           <AppIcon name="clock" />{{ t("card.schedule") }}
         </button>
@@ -507,6 +505,18 @@ a.chip {
   align-items: center;
   gap: 4px;
   margin-left: auto;
+}
+
+/* Узкий телефон: кнопки плотнее, чтобы всё влезло в один ряд. */
+@media (max-width: 480px) {
+  .actions {
+    gap: 6px;
+  }
+
+  .actions > button {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
 }
 
 .toggle :deep(.icon) {
