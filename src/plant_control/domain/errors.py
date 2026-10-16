@@ -113,6 +113,10 @@ class RouteNotCalibratedError(HydraulicsError):
     """Маршрут работает по калибровке, а калибровки ни у него, ни у базового нет."""
 
 
+class CalibrationStaleError(HydraulicsError):
+    """Калибровка маршрута сделана на другом насосе, баке или трубках: нужна новая."""
+
+
 # --- Поливальная машина ---
 
 

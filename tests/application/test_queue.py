@@ -229,6 +229,21 @@ async def test_schedule_request_expires_if_it_waits_too_long() -> None:
     assert state(waiting) is RequestState.EXPIRED
 
 
+async def test_group_policy_expires_requests_that_wait_too_long() -> None:
+    group = PowerGroup(
+        "psu-1", max_concurrent=1, min_start_gap=timedelta(0), max_wait=timedelta(minutes=10)
+    )
+    rig = Rig(groups_by_machine((m, group) for m in ("m-1", "m-2")))
+    rig.queue.submit("m-1", "main", 100)
+    waiting = rig.queue.submit("m-2", "main", 100)
+    await rig.dispatch()
+    assert state(waiting) is RequestState.QUEUED
+
+    rig.clock.current = T0 + timedelta(minutes=11)
+    await rig.dispatch()
+    assert state(waiting) is RequestState.EXPIRED
+
+
 async def test_history_keeps_finished_requests() -> None:
     rig = Rig()
     request = rig.queue.submit("m-1", "main", 100)

@@ -32,13 +32,14 @@ class PumpPassport:
     # flow - модель расхода насоса (flow.py): постоянная, линейная или табличная.
     # None - паспорта нет, машина считает полив по калибровке маршрутов.
     flow: FlowCurve | None
-    max_runtime: timedelta
+    # Предел непрерывной работы. None - предел выключен, насос не ограничен по времени.
+    max_runtime: timedelta | None
     cooldown: timedelta
 
     # Вызывается сразу после сгенерированного конструктора.
     # Аналог компактного конструктора record: здесь проверяем значения.
     def __post_init__(self) -> None:
-        if self.max_runtime <= timedelta(0):
+        if self.max_runtime is not None and self.max_runtime <= timedelta(0):
             raise InvalidPumpPassportError(f"max_runtime must be positive, got {self.max_runtime}")
         if self.cooldown < timedelta(0):
             raise InvalidPumpPassportError(f"cooldown must be non-negative, got {self.cooldown}")
@@ -101,12 +102,14 @@ class Pump:
             if elapsed < self._passport.cooldown:
                 raise PumpCoolingDownError("Pump is cooling down.")
 
-        if duration > self._passport.max_runtime:
+        limit = self._passport.max_runtime
+        if limit is not None and duration > limit:
             raise PumpRuntimeExceededError("Pump runtime exceeded.")
 
     def is_overrun(self, now: datetime) -> bool:
-        if self._state is PumpState.ON and self._started_at is not None:
-            return now - self._started_at > self._passport.max_runtime
+        limit = self._passport.max_runtime
+        if limit is not None and self._state is PumpState.ON and self._started_at is not None:
+            return now - self._started_at > limit
         return False
 
     # --- Изменение состояния ---

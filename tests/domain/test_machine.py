@@ -10,6 +10,7 @@ from plant_control.domain.collector import Collector, Valve
 from plant_control.domain.connection import Connection, Outlet, Route
 from plant_control.domain.errors import (
     AnotherValveOpenError,
+    CalibrationStaleError,
     InvalidMachineError,
     MachineBusyError,
     NotEnoughWaterError,
@@ -231,7 +232,9 @@ def test_machine_does_not_plan_when_valve_is_open(pump: Pump) -> None:
 # --- Режим калибровки ---
 
 
-def calibrated_machine(profiles: dict[str, FlowProfile]) -> WateringMachine:
+def calibrated_machine(
+    profiles: dict[str, FlowProfile], stale: frozenset[str] = frozenset()
+) -> WateringMachine:
     passport = PumpPassport(flow=None, max_runtime=timedelta(seconds=600), cooldown=timedelta(0))
     collector = Collector("collector-1", [Valve("v1"), Valve("v2")])
     return WateringMachine(
@@ -244,6 +247,7 @@ def calibrated_machine(profiles: dict[str, FlowProfile]) -> WateringMachine:
         collector=collector,
         supply_is_filled=True,
         profiles=profiles,
+        stale_routes=stale,
     )
 
 
@@ -261,6 +265,28 @@ def test_uncalibrated_route_cannot_be_watered() -> None:
     machine = calibrated_machine({"v1": PROFILE})
     with pytest.raises(RouteNotCalibratedError):
         machine.plan_watering("v2", 100, T0)
+
+
+def test_stale_calibration_blocks_only_its_route() -> None:
+    machine = calibrated_machine({"v1": PROFILE, "v2": PROFILE}, stale=frozenset({"v1"}))
+    assert machine.stale_routes == {"v1"}
+    with pytest.raises(CalibrationStaleError):
+        machine.plan_watering("v1", 100, T0)
+    assert machine.plan_watering("v2", 110, T0).duration_s == pytest.approx(12)
+
+
+def test_stale_routes_do_not_matter_in_datasheet_mode(pump: Pump) -> None:
+    machine = WateringMachine(
+        "machine-1",
+        pump=pump,
+        tank=tank(),
+        head_model=MidDoseHead(),
+        plumbing=DirectPlumbing(back_to_tank_fraction=0.5),
+        routes={"main": ROUTE},
+        stale_routes=frozenset({"main"}),
+    )
+    assert machine.stale_routes == frozenset()
+    machine.plan_watering("main", 100, T0)
 
 
 def test_pump_without_flow_needs_calibration() -> None:

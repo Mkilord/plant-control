@@ -81,7 +81,7 @@ class HealthService:
                 Observation(
                     machine.id,
                     ProblemKind.PUMP_OVERRUN,
-                    details="Насос работает дольше предела из паспорта",
+                    details="Насос работает дольше своего предела",
                 )
             )
 
@@ -97,6 +97,16 @@ class HealthService:
                             details="Состояние клапана неизвестно",
                         )
                     )
+
+        for route_id in sorted(machine.stale_routes):
+            found.append(
+                Observation(
+                    machine.id,
+                    ProblemKind.CALIBRATION_STALE,
+                    target=route_id,
+                    details="Насос, бак или трубки изменились после калибровки",
+                )
+            )
 
         found.extend(self._water_observations(machine))
         return found

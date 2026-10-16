@@ -159,3 +159,11 @@ def test_pump_exposes_start_and_stop_times(passport: PumpPassport) -> None:
     pump.mark_stopped(T0 + timedelta(seconds=10))
     assert pump.started_at == T0
     assert pump.stopped_at == T0 + timedelta(seconds=10)
+
+
+def test_pump_without_runtime_limit_runs_any_time() -> None:
+    passport = PumpPassport(flow=None, max_runtime=None, cooldown=timedelta(0))
+    pump = Pump("pump-1", passport)
+    pump.check_can_start(T0, timedelta(hours=5))
+    pump.mark_started(T0)
+    assert not pump.is_overrun(T0 + timedelta(days=1))

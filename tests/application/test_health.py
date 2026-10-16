@@ -4,9 +4,20 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 from plant_control.application.health import HealthService
+from plant_control.domain.calibration import FlowPoint, FlowProfile
+from plant_control.domain.collector import Collector, Valve
 from plant_control.domain.machine import WateringMachine
 from plant_control.domain.problems import Observation, Problem, ProblemBoard, ProblemKind
-from tests.application.builders import collector_machine, simple_machine
+from plant_control.domain.tank import Tank
+from plant_control.domain.watering import CollectorPlumbing, StartLevelHead
+from tests.application.builders import (
+    GEOMETRY,
+    ROUTE,
+    TUBE_10ML,
+    collector_machine,
+    make_pump,
+    simple_machine,
+)
 from tests.application.fakes import FakeClock
 
 T0 = datetime(2026, 9, 28, 12, 0, tzinfo=UTC)
@@ -88,3 +99,24 @@ def test_extra_observations_from_infrastructure() -> None:
     extra = Observation(machine.id, ProblemKind.HA_DISCONNECTED, details="нет связи")
     report = service(machine).check([extra])
     assert kinds(report.opened) == [ProblemKind.HA_DISCONNECTED]
+
+
+def test_stale_calibration_blocks_only_its_plant() -> None:
+    profile = FlowProfile(points=(FlowPoint(2000, 10),))
+    machine = WateringMachine(
+        "machine-1",
+        pump=make_pump(),
+        tank=Tank.with_reserve(GEOMETRY, reserve_ml=500),
+        head_model=StartLevelHead(),
+        plumbing=CollectorPlumbing(supply=TUBE_10ML),
+        routes={"v1": ROUTE, "v2": ROUTE},
+        collector=Collector("collector-1", [Valve("v1"), Valve("v2")]),
+        profiles={"v1": profile, "v2": profile},
+        stale_routes=frozenset({"v2"}),
+    )
+    health = service(machine)
+    report = health.check()
+    stale = [p for p in report.active if p.kind is ProblemKind.CALIBRATION_STALE]
+    assert [p.target for p in stale] == ["v2"]
+    assert health.board.blocking_for("machine-1", T0, {"v1"}) == []
+    assert len(health.board.blocking_for("machine-1", T0, {"v2"})) == 1

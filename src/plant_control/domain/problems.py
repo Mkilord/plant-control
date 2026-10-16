@@ -33,6 +33,7 @@ class ProblemKind(Enum):
     TANK_LOW = "tank_low"
     WATERING_FAILED = "watering_failed"
     SCHEDULE_SKIPPED = "schedule_skipped"
+    CALIBRATION_STALE = "calibration_stale"
 
 
 SEVERITY: dict[ProblemKind, Severity] = {
@@ -46,6 +47,7 @@ SEVERITY: dict[ProblemKind, Severity] = {
     ProblemKind.TANK_LOW: Severity.INFO,
     ProblemKind.WATERING_FAILED: Severity.WARNING,
     ProblemKind.SCHEDULE_SKIPPED: Severity.INFO,
+    ProblemKind.CALIBRATION_STALE: Severity.WARNING,
 }
 
 # Проблемы, при которых поливать нельзя.
@@ -58,13 +60,18 @@ BLOCKING: frozenset[ProblemKind] = frozenset(
         ProblemKind.VALVE_STATE_UNKNOWN,
         ProblemKind.PUMP_OVERRUN,
         ProblemKind.TANK_EMPTY,
+        ProblemKind.CALIBRATION_STALE,
     }
 )
 
 # Проблемы одного клапана: мешают поливу только своего растения, остальные поливаются.
 # Их target - id маршрута или клапана.
 ROUTE_SCOPED: frozenset[ProblemKind] = frozenset(
-    {ProblemKind.VALVE_ENTITY_MISSING, ProblemKind.VALVE_STATE_UNKNOWN}
+    {
+        ProblemKind.VALVE_ENTITY_MISSING,
+        ProblemKind.VALVE_STATE_UNKNOWN,
+        ProblemKind.CALIBRATION_STALE,
+    }
 )
 
 

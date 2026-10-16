@@ -248,13 +248,13 @@ class WateringQueue:
         """Запустить всё, что уже можно запустить. Вызывается диспетчером и тестами."""
         now = self._clock.now()
         for request in self._sorted_queue():
-            if request.expired_at(now):
+            group = self._group_of(request.machine_id)
+            if request.expired_at(now) or group.waited_too_long(request.requested_at, now):
                 self._queued.remove(request)
                 self._finish(request, RequestState.EXPIRED)
                 continue
             if self._machine_is_busy(request.machine_id):
                 continue
-            group = self._group_of(request.machine_id)
             blocked = group.check_can_start(
                 running=self._running_in_group(group.id),
                 last_start_at=self._last_start.get(group.id),

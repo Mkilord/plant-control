@@ -27,12 +27,16 @@ class PowerGroup:
     max_concurrent: int = 1
     # Минимальная пауза между включениями насосов, чтобы не было броска тока.
     min_start_gap: timedelta = timedelta(seconds=2)
+    # Сколько заявка может ждать места в группе. None - сколько угодно.
+    max_wait: timedelta | None = None
 
     def __post_init__(self) -> None:
         if self.max_concurrent < 1:
             raise InvalidPowerGroupError(f"max_concurrent must be >= 1, got {self.max_concurrent}")
         if self.min_start_gap < timedelta(0):
             raise InvalidPowerGroupError("min_start_gap must not be negative")
+        if self.max_wait is not None and self.max_wait <= timedelta(0):
+            raise InvalidPowerGroupError("max_wait must be positive")
 
     def check_can_start(
         self, running: int, last_start_at: datetime | None, now: datetime
@@ -43,6 +47,10 @@ class PowerGroup:
         if last_start_at is not None and now - last_start_at < self.min_start_gap:
             return StartBlock.TOO_SOON
         return None
+
+    def waited_too_long(self, requested_at: datetime, now: datetime) -> bool:
+        """Заявка ждёт места в группе дольше, чем разрешает политика группы."""
+        return self.max_wait is not None and now - requested_at > self.max_wait
 
 
 # Группа по умолчанию для машины, которой группу не задали: сама с собой, по одному поливу.

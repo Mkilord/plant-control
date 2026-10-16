@@ -11,6 +11,7 @@ from plant_control.domain.calibration import FlowProfile
 from plant_control.domain.collector import Collector
 from plant_control.domain.connection import Route
 from plant_control.domain.errors import (
+    CalibrationStaleError,
     InvalidMachineError,
     MachineBusyError,
     RouteNotCalibratedError,
@@ -52,6 +53,7 @@ class WateringMachine:
         supply_is_filled: bool = False,
         profiles: dict[str, FlowProfile] | None = None,
         flow_tracker: FlowTracker | None = None,
+        stale_routes: frozenset[str] = frozenset(),
     ) -> None:
         if not routes:
             raise InvalidMachineError("machine needs at least one route")
@@ -82,6 +84,8 @@ class WateringMachine:
         # None - режим паспорта. Пустой словарь - режим калибровки, но замеров ещё нет.
         self._profiles = dict(profiles) if profiles is not None else None
         self._flow_tracker = flow_tracker or FlowTracker()
+        # Маршруты, калибровка которых сделана на другом железе. Поливать их нельзя.
+        self._stale_routes = frozenset(stale_routes) & set(routes)
         # Текущий полив. None - машина свободна.
         self._current: WateringPlan | None = None
 
@@ -112,6 +116,11 @@ class WateringMachine:
     @property
     def uses_calibration(self) -> bool:
         return self._profiles is not None
+
+    @property
+    def stale_routes(self) -> frozenset[str]:
+        """Маршруты с устаревшей калибровкой. В режиме паспорта всегда пусто."""
+        return self._stale_routes if self.uses_calibration else frozenset()
 
     def profile_for(self, route_id: str) -> FlowProfile | None:
         """Профиль расхода маршрута. None - режим паспорта или замера ещё нет."""
@@ -202,6 +211,8 @@ class WateringMachine:
 
     def _calculate(self, route_id: str, route: Route, dose_ml: float) -> WateringPlan:
         if self._profiles is not None:
+            if route_id in self._stale_routes:
+                raise CalibrationStaleError(f"calibration of route {route_id!r} is stale")
             profile = self._profiles.get(route_id)
             if profile is None:
                 raise RouteNotCalibratedError(f"route {route_id!r} is not calibrated")
