@@ -60,9 +60,11 @@ Or manually:
 | --- | --- | --- |
 | Stable | `https://github.com/Mkilord/plant-control` | Everyday use |
 | Beta | `https://github.com/Mkilord/plant-control#beta` | Trying new features early |
+| Dev | `https://github.com/Mkilord/plant-control#dev-channel` | Testing every change as soon as it lands |
 
-Beta builds may contain bugs. Back up before switching channels. Add only one of
-the two repositories.
+Beta builds may contain bugs, dev builds even more so: every push to `dev`
+becomes a new dev version. Back up before switching channels. Add only one of
+the repositories.
 
 ## Documentation
 

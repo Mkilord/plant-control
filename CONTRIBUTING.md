@@ -78,6 +78,7 @@ use **Rebuild**.
 | Branch | Purpose |
 | --- | --- |
 | `dev` | Day-to-day work. Pull requests go here. |
+| `dev-channel` | Dev channel. Maintained by GitHub Actions, do not push to it. |
 | `beta` | Beta channel: what is ready for testing on real setups. |
 | `main` | Stable channel: released versions only. |
 
@@ -88,11 +89,26 @@ the branches never diverge.
 
 The version lives in `config.yaml` and is also the tag of the prebuilt image.
 
+- Dev: `0.1.1-dev.57` — set automatically, never written to `config.yaml`.
 - Beta: `0.2.0-beta.1`, `0.2.0-beta.2`, …
 - Stable: `0.2.0`.
 
 Home Assistant offers an update only when the version grows. The frontend shows
 the same version (passed into the build by the `Dockerfile`).
+
+## Dev channel
+
+Every push to `dev` runs **Dev channel** (`.github/workflows/dev-channel.yaml`):
+
+1. The build version is the next one after `config.yaml` plus the number of
+   commits in `dev`: `0.1.0` → `0.1.1-dev.N`, `0.2.0-beta.1` → `0.2.0-dev.N`.
+2. **Builder** builds the images for that version.
+3. Once the images exist, the `dev-channel` branch is overwritten with this
+   commit, the new version and the name "PlantControl (dev)".
+
+Home Assistant with the `…#dev-channel` repository sees the update after its
+next store refresh, or right away with **Check for updates**. A new push cancels
+an unfinished build, so the channel always gets the latest commit.
 
 ## Releasing
 

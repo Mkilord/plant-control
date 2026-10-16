@@ -105,7 +105,8 @@ add-on.
 New versions show up in Home Assistant like for any add-on. See
 [CHANGELOG.md](CHANGELOG.md) for what changed. To get beta versions, add the
 repository as `https://github.com/Mkilord/plant-control#beta` instead of the
-regular one.
+regular one. Dev versions (every change, untested) come from
+`https://github.com/Mkilord/plant-control#dev-channel`.
 
 ## Troubleshooting
 

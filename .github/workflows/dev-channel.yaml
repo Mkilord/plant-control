@@ -1,0 +1,67 @@
+# Канал dev: каждый пуш в dev становится новой версией для Home Assistant.
+#
+# 1. Версия сборки: следующая после config.yaml плюс номер, например 0.1.1-dev.57
+#    (.github/scripts/dev_channel.py).
+# 2. Образы с этой версией собирает builder.yaml.
+# 3. Только когда образы готовы, ветка dev-channel перезаписывается этим коммитом dev
+#    с новой версией в config.yaml. Home Assistant смотрит на dev-channel и видит
+#    обновление, образ для которого уже есть.
+#
+# В Home Assistant: https://github.com/Mkilord/plant-control#dev-channel
+name: Dev channel
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+# Новый пуш отменяет недоделанную сборку: в канал уходит только последний коммит.
+concurrency:
+  group: dev-channel
+  cancel-in-progress: true
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Номер сборки - число коммитов, нужна вся история.
+          fetch-depth: 0
+      - name: Build version
+        id: version
+        run: |
+          version=$(python3 .github/scripts/dev_channel.py version "$(git rev-list --count HEAD)")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Dev build: $version"
+
+  build:
+    name: Images
+    needs: version
+    uses: ./.github/workflows/builder.yaml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      version: ${{ needs.version.outputs.version }}
+
+  publish:
+    name: Publish dev-channel
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Point dev-channel at this build
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          python3 .github/scripts/dev_channel.py apply "$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Dev build $VERSION"
+          git push --force origin HEAD:refs/heads/dev-channel

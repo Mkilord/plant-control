@@ -2,6 +2,7 @@
 # Образ собирается, когда в main или beta появляется версия из config.yaml,
 # для которой образа ещё нет. Уже выпущенные образы не перезаписываются,
 # кроме ручного запуска с force.
+# Канал dev вызывает эту сборку сам (dev-channel.yaml) и передаёт версию сборки.
 name: Builder
 
 on:
@@ -13,6 +14,19 @@ on:
         description: Rebuild even if the image for this version already exists
         type: boolean
         default: false
+  workflow_call:
+    inputs:
+      version:
+        description: Version to build instead of the one in config.yaml
+        type: string
+        default: ""
+      force:
+        type: boolean
+        default: false
+    outputs:
+      version:
+        description: Version that was built
+        value: ${{ jobs.info.outputs.version }}
 
 permissions:
   contents: read
@@ -36,7 +50,10 @@ jobs:
       - name: Read version
         id: version
         run: |
-          version=$(python3 -c "import yaml; print(yaml.safe_load(open('config.yaml', encoding='utf-8'))['version'])")
+          version="${{ inputs.version }}"
+          if [ -z "$version" ]; then
+            version=$(python3 -c "import yaml; print(yaml.safe_load(open('config.yaml', encoding='utf-8'))['version'])")
+          fi
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/$owner/plant-control" >> "$GITHUB_OUTPUT"
