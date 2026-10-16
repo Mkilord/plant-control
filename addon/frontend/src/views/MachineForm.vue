@@ -749,7 +749,7 @@ function onSavedAsNew(id: string) {
           <AppIcon name="info" />
           <span>
             {{ t("wizard.machine.schedule_hint") }}
-            <RouterLink to="/catalog/schedule">{{ t("wizard.machine.schedule_catalog") }}</RouterLink>
+            <RouterLink to="/waterings">{{ t("wizard.machine.schedule_catalog") }}</RouterLink>
           </span>
         </p>
         <div class="fields">

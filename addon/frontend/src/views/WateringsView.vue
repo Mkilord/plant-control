@@ -12,6 +12,7 @@ import {
   type Schedule,
 } from "../api";
 import AppIcon, { type IconName } from "../components/AppIcon.vue";
+import SharedSchedules from "../components/SharedSchedules.vue";
 import { byDay, clock, ml, span, untilText } from "../format";
 import { t } from "../i18n";
 
@@ -208,6 +209,9 @@ function duration(item: QueueItem): string {
           {{ t("waterings.disabled", { count: disabledCount }) }}
         </p>
       </section>
+
+      <!-- Общие расписания -->
+      <SharedSchedules :machines="machines" @changed="refresh" />
 
       <!-- Журнал -->
       <section class="card">

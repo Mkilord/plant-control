@@ -16,7 +16,10 @@ export const router = createRouter({
     { path: "/machines/new", component: MachineForm },
     { path: "/machines/:id/calibrate", component: CalibrationView, props: true },
     { path: "/machines/:id", component: MachineForm, props: true },
-    { path: "/catalog/:kind?", component: CatalogView, props: true },
+    { path: "/equipment/:kind?", component: CatalogView, props: true },
+    // Расписания переехали в "Поливы", остальное - в "Оборудование".
+    { path: "/catalog/schedule", redirect: "/waterings" },
+    { path: "/catalog/:kind?", redirect: (to) => `/equipment/${to.params.kind ?? ""}` },
     { path: "/waterings", component: WateringsView },
     // Старый адрес вкладки: закладки не должны ломаться.
     { path: "/queue", redirect: "/waterings" },

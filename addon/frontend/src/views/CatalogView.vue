@@ -3,7 +3,7 @@
 // Запись заводится один раз и используется многими машинами.
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { CATALOG_KINDS, api, errorText, type CatalogKind } from "../api";
+import { api, errorText, type CatalogKind } from "../api";
 import { clone, KIND_ICON, KIND_TITLE, catalog, catalogError, loadCatalog, summary } from "../catalog";
 import { t, type MessageKey } from "../i18n";
 import AppIcon from "../components/AppIcon.vue";
@@ -13,8 +13,10 @@ const props = defineProps<{ kind?: string }>();
 const route = useRoute();
 const router = useRouter();
 
+// Оборудование. Общие расписания живут на вкладке "Поливы".
+const KINDS: CatalogKind[] = ["tank", "pump", "collector", "power"];
 const kind = computed<CatalogKind>(() =>
-  CATALOG_KINDS.includes(props.kind as CatalogKind) ? (props.kind as CatalogKind) : "tank",
+  KINDS.includes(props.kind as CatalogKind) ? (props.kind as CatalogKind) : "tank",
 );
 const entries = computed(() => catalog.value[kind.value]);
 const editing = ref<{ id: string | null; wizard: boolean } | null>(null);
@@ -31,7 +33,7 @@ const DESC: Record<CatalogKind, MessageKey> = {
 onMounted(loadCatalog);
 
 function select(value: CatalogKind) {
-  void router.replace(`/catalog/${value}`);
+  void router.replace(`/equipment/${value}`);
 }
 
 async function remove(id: string, name: string) {
@@ -77,7 +79,7 @@ function usersText(users: { name: string; routes: string[] }[]): string {
 
     <nav class="kinds" :aria-label="t('catalog.title')">
       <button
-        v-for="item in CATALOG_KINDS"
+        v-for="item in KINDS"
         :key="item"
         type="button"
         class="kind"

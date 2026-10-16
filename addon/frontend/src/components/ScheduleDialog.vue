@@ -154,7 +154,7 @@ async function run(action: () => Promise<unknown>) {
             : t("schedule.plant_dose", { dose: ml(route.default_dose_ml) })
         }}
       </p>
-      <RouterLink class="small" to="/catalog/schedule">{{ t("schedule.manage_templates") }}</RouterLink>
+      <RouterLink class="small" to="/waterings">{{ t("schedule.manage_templates") }}</RouterLink>
     </template>
 
     <template v-else>

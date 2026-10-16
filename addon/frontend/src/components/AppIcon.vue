@@ -28,7 +28,10 @@ export type IconName =
   | "can"
   | "calendar"
   | "history"
-  | "skip";
+  | "skip"
+  | "dots"
+  | "copy"
+  | "toolbox";
 
 const PATHS: Record<IconName, string[]> = {
   droplet: ["M12 3.5c3.2 4.2 6 7.6 6 10.9a6 6 0 0 1-12 0c0-3.3 2.8-6.7 6-10.9z"],
@@ -101,6 +104,13 @@ const PATHS: Record<IconName, string[]> = {
   skip: ["M6 6l7 6-7 6z", "M17 6v12"],
   calculator: ["M6 3h12v18H6z", "M9 7h6", "M9 12h.01M12 12h.01M15 12h.01M9 16h.01M12 16h.01M15 16h.01"],
   edit: ["M4 20h4L19 9l-4-4L4 16z", "M13.5 6.5l4 4"],
+  dots: [
+    "M5 12m-1.2 0a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0",
+    "M12 12m-1.2 0a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0",
+    "M19 12m-1.2 0a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0",
+  ],
+  copy: ["M9 9h11v11H9z", "M5 15H4V4h11v1"],
+  toolbox: ["M3 9h18v10H3z", "M8 9V6h8v3", "M3 13.5h18", "M10 12v3M14 12v3"],
   refill: ["M12 3.5c2.6 3.4 5 6.2 5 9a5 5 0 0 1-10 0c0-2.8 2.4-5.6 5-9z", "M12 11v5", "M9.5 13.5h5"],
 };
 

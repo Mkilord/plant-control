@@ -5,6 +5,7 @@ import { ml, time } from "../format";
 import { t } from "../i18n";
 import AppIcon from "./AppIcon.vue";
 import CopyMachineDialog from "./CopyMachineDialog.vue";
+import MoreMenu from "./MoreMenu.vue";
 import ScheduleDialog from "./ScheduleDialog.vue";
 import TankDialog from "./TankDialog.vue";
 import TankGauge from "./TankGauge.vue";
@@ -258,21 +259,21 @@ async function stop() {
       >
         <AppIcon name="droplet" />{{ t("card.water") }}
       </button>
-      <button @click="showTank = true"><AppIcon name="refill" />{{ t("card.tank") }}</button>
-      <button @click="showSchedule = true">
-        <AppIcon name="clock" />{{ t("card.schedule") }}
+      <button :title="t('card.tank')" @click="showTank = true">
+        <AppIcon name="refill" /><span class="compact">{{ t("card.tank") }}</span>
       </button>
-      <RouterLink
-        class="button"
-        :to="`/machines/${machine.id}/calibrate`"
-        :title="t('calib.title')"
-      >
-        <AppIcon name="pump" />{{ t("calib.button") }}
-      </RouterLink>
-      <button :title="t('copy.button_hint')" @click="showCopy = true">
-        <AppIcon name="plus" />{{ t("copy.button") }}
+      <button :title="t('card.schedule')" @click="showSchedule = true">
+        <AppIcon name="clock" /><span class="compact">{{ t("card.schedule") }}</span>
       </button>
       <span class="spacer" />
+      <MoreMenu :label="t('card.more')">
+        <RouterLink :to="`/machines/${machine.id}/calibrate`">
+          <AppIcon name="pump" />{{ t("calib.button") }}
+        </RouterLink>
+        <button type="button" @click="showCopy = true">
+          <AppIcon name="copy" />{{ t("copy.button") }}
+        </button>
+      </MoreMenu>
       <button class="danger" :class="{ solid: status.busy }" @click="stop">
         <AppIcon name="stop" :size="16" />{{ t("card.stop") }}
       </button>
@@ -449,6 +450,23 @@ a.chip {
 
 .spacer {
   flex: 1;
+}
+
+/* На узком телефоне у второстепенных кнопок остаются только иконки: всё в один ряд. */
+@media (max-width: 480px) {
+  .compact {
+    display: none;
+  }
+
+  .actions {
+    gap: 6px;
+  }
+
+  .actions > button,
+  .actions > .button {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
 }
 
 .suggestion {
