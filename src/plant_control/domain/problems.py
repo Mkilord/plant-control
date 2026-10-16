@@ -34,6 +34,8 @@ class ProblemKind(Enum):
     WATERING_FAILED = "watering_failed"
     SCHEDULE_SKIPPED = "schedule_skipped"
     CALIBRATION_STALE = "calibration_stale"
+    # Реле насоса включилось, когда машина не поливала: add-on его выключил.
+    PUMP_UNEXPECTED_ON = "pump_unexpected_on"
 
 
 SEVERITY: dict[ProblemKind, Severity] = {
@@ -48,6 +50,7 @@ SEVERITY: dict[ProblemKind, Severity] = {
     ProblemKind.WATERING_FAILED: Severity.WARNING,
     ProblemKind.SCHEDULE_SKIPPED: Severity.INFO,
     ProblemKind.CALIBRATION_STALE: Severity.WARNING,
+    ProblemKind.PUMP_UNEXPECTED_ON: Severity.ERROR,
 }
 
 # Проблемы, при которых поливать нельзя.

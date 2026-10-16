@@ -104,6 +104,9 @@ async def pulse(entity_id: str, body: PulseRequest, ha: Ha, request: Request) ->
                 raise HTTPException(
                     status.HTTP_409_CONFLICT, f"machine {entry.config.name!r} is busy"
                 )
+    if controller is not None:
+        # Включение нарочное: сторож не должен принять его за сбой.
+        controller.allow_pump_on(entity_id, body.seconds + 5)
     await _switch(ha, entity_id, on=True)
     try:
         await asyncio.sleep(body.seconds)

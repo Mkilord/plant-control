@@ -22,6 +22,8 @@ class HaHealthSource:
     def __init__(self, ha: HaGateway, registry: MachineRegistry) -> None:
         self._ha = ha
         self._registry = registry
+        # Состояния сущностей с последней проверки: по ним сторож сверяет реле насосов.
+        self.last_states: dict[str, str] = {}
 
     async def observations(self) -> list[Observation]:
         entries = self._registry.entries()
@@ -40,6 +42,7 @@ class HaHealthSource:
 
         try:
             states = {state.entity_id: state.state for state in await self._ha.get_states()}
+            self.last_states = states
         except HomeAssistantError as error:
             log.warning("cannot read states for health check: %s", error)
             return [

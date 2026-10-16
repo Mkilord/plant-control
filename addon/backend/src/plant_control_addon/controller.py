@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Coroutine, Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -24,7 +25,7 @@ from plant_control.application.queue import (
 from plant_control.application.safety_service import SafetyService
 from plant_control.application.watering_service import WateringService, WateringTimings
 from plant_control.domain.errors import MachineBusyError, WateringBlockedError
-from plant_control.domain.problems import Problem, ProblemKind
+from plant_control.domain.problems import Observation, Problem, ProblemKind
 from plant_control.domain.pump import PumpState
 from plant_control.domain.watering import WateringPlan
 
@@ -40,6 +41,24 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 CALIBRATION_IGNORES = frozenset({ProblemKind.CALIBRATION_STALE})
+
+# Насос включился сам: сколько ждать подтверждения выключения перед повтором команды,
+# сколько повторов до признания состояния неизвестным и сколько держать проблему.
+UNEXPECTED_RETRY = timedelta(seconds=3)
+# Сразу после полива HA может ещё показывать "on": даём реле время отчитаться.
+UNEXPECTED_GRACE = timedelta(seconds=5)
+UNEXPECTED_ATTEMPTS = 3
+UNEXPECTED_PROBLEM_FOR = timedelta(minutes=30)
+
+
+@dataclass
+class PumpWatch:
+    """Что HA говорит о реле насоса и что сторож уже сделал."""
+
+    on: bool
+    since: datetime
+    attempts: int = 0
+    last_attempt: datetime | None = None
 
 
 class SystemClock:
@@ -84,6 +103,13 @@ class Controller:
         self._background: set[asyncio.Task[Any]] = set()
         # Мастер калибровки. Подключается после создания: ему самому нужен контроллер.
         self.calibration: CalibrationManager | None = None
+        # Фактическое состояние реле насосов по HA: сторож сверяет его с ожидаемым.
+        self._pump_watch: dict[str, PumpWatch] = {}
+        # Реле, которые сейчас включают нарочно (проверка из мастера): до какого времени.
+        self._settle_until: dict[str, datetime] = {}
+        self._allowed_on: dict[str, datetime] = {}
+        # Машины, у которых насос включался без команды: когда и что.
+        self._unexpected: dict[str, tuple[datetime, str]] = {}
         # Очередь поливов: она же следит за группами питания.
         # Сам контроллер для неё - исполнитель (метод water).
         self.queue = WateringQueue(
@@ -210,6 +236,14 @@ class Controller:
 
     async def _run_watering(self, entry: MachineEntry, route_id: str, dose_ml: float) -> None:
         started = self._clock.now()
+        try:
+            await self._run_watering_steps(entry, route_id, dose_ml, started)
+        finally:
+            self._settle_until[entry.id] = self._clock.now() + UNEXPECTED_GRACE
+
+    async def _run_watering_steps(
+        self, entry: MachineEntry, route_id: str, dose_ml: float, started: datetime
+    ) -> None:
         failure: Exception | None = None
         try:
             # Пока заявка ждала очереди, могло что-то сломаться: проверяем перед самым стартом.
@@ -363,6 +397,9 @@ class Controller:
         if self._health is None:
             return None
         extra = await self._health_source.observations() if self._health_source else []
+        extra = [*extra, *self._unexpected_observations()]
+        if self._health_source is not None:
+            self._learn_states(self._health_source.last_states)
         report = self._health.check(extra)
         for problem in report.opened:
             log.warning(
@@ -430,12 +467,18 @@ class Controller:
     # --- Фоновые задачи ---
 
     async def watchdog(self, interval: float = 1.0) -> None:
-        """Сторож: раз в interval проверяет, не работает ли насос дольше предела."""
+        """Сторож: раз в interval проверяет насосы.
+
+        - насос работает дольше предела - аварийная остановка;
+        - HA показывает насос включённым, а машина не поливает и не калибруется -
+          выключить и повторять, пока реле не подтвердит выключение.
+        """
         while True:
             for entry in self._registry.entries():
-                if entry.machine.pump.state is not PumpState.ON:
-                    continue
                 try:
+                    await self._check_stray_pump(entry)
+                    if entry.machine.pump.state is not PumpState.ON:
+                        continue
                     if await self._safety(entry).check_overrun(entry.id):
                         log.error("pump of %s ran over its limit, stopped", entry.id)
                         await self._cancel_watering(entry)
@@ -443,18 +486,118 @@ class Controller:
                     log.exception("watchdog failed for %s", entry.id)
             await asyncio.sleep(interval)
 
+    # --- Насос, включившийся без команды ---
+
+    def allow_pump_on(self, entity_id: str, seconds: float) -> None:
+        """Реле включают нарочно (проверка из мастера): не считать это сбоем."""
+        self._allowed_on[entity_id] = self._clock.now() + timedelta(seconds=seconds)
+
+    def _expects_pump_on(self, entry: MachineEntry) -> bool:
+        now = self._clock.now()
+        if entry.is_busy or self.is_calibrating(entry.id):
+            # Полив или калибровка идёт: и ещё немного после конца.
+            self._settle_until[entry.id] = now + UNEXPECTED_GRACE
+            return True
+        settle = self._settle_until.get(entry.id)
+        if settle is not None and now < settle:
+            return True
+        allowed = self._allowed_on.get(entry.config.pump.entity_id)
+        return allowed is not None and now < allowed
+
+    def _learn_states(self, states: dict[str, str]) -> None:
+        """Состояния из полной выборки HA: только для реле, о которых ещё нет событий."""
+        for entry in self._registry.entries():
+            entity = entry.config.pump.entity_id
+            state = states.get(entity)
+            if entity not in self._pump_watch and state in ("on", "off"):
+                self._pump_watch[entity] = PumpWatch(on=state == "on", since=self._clock.now())
+
+    async def _check_stray_pump(self, entry: MachineEntry) -> None:
+        """HA показывает насос включённым, хотя машина ничего не делает: выключить."""
+        watch = self._pump_watch.get(entry.config.pump.entity_id)
+        if watch is None or not watch.on or self._expects_pump_on(entry):
+            if watch is not None and not watch.on:
+                watch.attempts = 0
+            return
+        now = self._clock.now()
+        if watch.last_attempt is not None and now - watch.last_attempt < UNEXPECTED_RETRY:
+            return
+        if watch.attempts >= UNEXPECTED_ATTEMPTS:
+            # Реле не выключается: дальше пусть решает человек, полив запрещён.
+            if entry.machine.pump.state is not PumpState.UNKNOWN:
+                log.error(
+                    "pump %s of %s stays on after %d off commands",
+                    entry.config.pump.entity_id,
+                    entry.id,
+                    watch.attempts,
+                )
+                entry.machine.pump.mark_unknown()
+                await self._registry.save(entry.machine)
+                await self.recheck()
+            return
+        watch.attempts += 1
+        watch.last_attempt = now
+        await self._stop_stray_pump(entry, watch.attempts)
+
+    async def _stop_stray_pump(self, entry: MachineEntry, attempt: int) -> None:
+        entity = entry.config.pump.entity_id
+        log.warning(
+            "pump %s of %s is on but nothing is running, turning it off (attempt %d)",
+            entity,
+            entry.id,
+            attempt,
+        )
+        first = entry.id not in self._unexpected
+        self._unexpected[entry.id] = (self._clock.now(), entity)
+        errors = await self._safety(entry).safe_start(entry.id)
+        for error in errors:
+            log.error("cannot stop stray pump of %s: %s", entry.id, error)
+        if first:
+            await self.recheck()
+
+    def _unexpected_observations(self) -> list[Observation]:
+        now = self._clock.now()
+        found: list[Observation] = []
+        for machine_id, (at, entity) in list(self._unexpected.items()):
+            if now - at > UNEXPECTED_PROBLEM_FOR:
+                del self._unexpected[machine_id]
+                continue
+            found.append(
+                Observation(
+                    machine_id,
+                    ProblemKind.PUMP_UNEXPECTED_ON,
+                    target=entity,
+                    details=(
+                        f"Реле {entity} включилось, когда машина не поливала. Add-on его выключил"
+                    ),
+                )
+            )
+        return found
+
     def on_connected(self) -> None:
         """HA (пере)подключился: привести железо в безопасное состояние."""
         self._spawn(self.safe_start_all())
 
     def on_state_changed(self, entity_id: str, state: EntityState | None) -> None:
-        """HA сообщил новое состояние сущности: синхронизировать насосы."""
+        """HA сообщил новое состояние сущности: синхронизировать насосы.
+
+        Насос включился, а машина не поливает и не калибруется: это не ручное
+        включение, а сбой (потерянная команда выключения, запоздалое состояние
+        многоканального модуля). Такой насос сразу выключается.
+        """
         if state is None or state.state not in ("on", "off"):
             return
+        is_on = state.state == "on"
         for entry in self._registry.entries():
-            if entry.config.pump.entity_id == entity_id:
-                safety = self._safety(entry)
-                self._spawn(safety.observe_pump_state(entry.id, is_on=state.state == "on"))
+            if entry.config.pump.entity_id != entity_id:
+                continue
+            watch = self._pump_watch.get(entity_id)
+            if watch is None or watch.on != is_on:
+                self._pump_watch[entity_id] = PumpWatch(on=is_on, since=self._clock.now())
+            safety = self._safety(entry)
+            self._spawn(safety.observe_pump_state(entry.id, is_on=is_on))
+            if is_on and not self._expects_pump_on(entry):
+                self._spawn(self._check_stray_pump(entry))
 
     # --- Внутреннее ---
 

@@ -78,6 +78,10 @@ class FakeGateway:
         self.connect_listeners.append(listener)
 
     def emit(self, entity_id: str, state: str) -> None:
+        self.states = [
+            EntityState(entity_id, state, s.friendly_name) if s.entity_id == entity_id else s
+            for s in self.states
+        ]
         for listener in self.state_listeners:
             listener(entity_id, EntityState(entity_id, state, entity_id))
 

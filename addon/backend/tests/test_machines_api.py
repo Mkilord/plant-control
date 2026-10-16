@@ -2,6 +2,7 @@
 
 import asyncio
 import copy
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -269,23 +270,111 @@ async def test_overfill_is_409(api: httpx.AsyncClient) -> None:
     assert response.status_code == 409
 
 
-async def test_manual_pump_start_in_ha_is_tracked(
+async def test_pump_that_turns_on_by_itself_is_switched_off(
     api: httpx.AsyncClient, gateway: FakeGateway
 ) -> None:
+    """Реле насоса включилось, а машина не поливает: это сбой, насос выключается сразу."""
     machine_id = (await create(api, SIMPLE))["id"]
+    gateway.calls.clear()
 
     gateway.emit("switch.pump_1", "on")
-    await asyncio.sleep(0.02)
+    await asyncio.sleep(0.1)
 
+    assert "turn_off switch.pump_1" in gateway.commands()
     body = (await api.get(f"/api/machines/{machine_id}")).json()
-    assert body["status"]["pump"]["state"] == "on"
+    assert body["status"]["pump"]["state"] == "off"
+    problems = (await api.get("/api/problems")).json()
+    assert [p["kind"] for p in problems] == ["pump_unexpected_on"]
+    assert not problems[0]["blocking"]
 
 
-async def test_watchdog_stops_pump_left_on(api: httpx.AsyncClient, gateway: FakeGateway) -> None:
+async def test_relay_that_stays_on_blocks_watering(
+    api: httpx.AsyncClient, gateway: FakeGateway, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Реле не подтверждает выключение: команда повторяется, потом полив запрещён."""
+    from plant_control_addon import controller as controller_module
+
+    monkeypatch.setattr(controller_module, "UNEXPECTED_RETRY", timedelta(0))
+    machine_id = (await create(api, SIMPLE))["id"]
+    gateway.calls.clear()
+
+    # HA так и показывает "on": команды выключения до реле не доходят.
+    gateway.emit("switch.pump_1", "on")
+    await asyncio.sleep(0.4)
+
+    offs = [c for c in gateway.commands() if c == "turn_off switch.pump_1"]
+    assert len(offs) == 3
+    body = (await api.get(f"/api/machines/{machine_id}")).json()
+    assert body["status"]["pump"]["state"] == "unknown"
+    response = await api.post(
+        f"/api/machines/{machine_id}/water", json={"route_id": "main", "dose_ml": 10}
+    )
+    assert response.status_code == 409
+
+
+async def test_relay_confirming_off_clears_retries(
+    api: httpx.AsyncClient, gateway: FakeGateway, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from plant_control_addon import controller as controller_module
+
+    monkeypatch.setattr(controller_module, "UNEXPECTED_RETRY", timedelta(0))
+    machine_id = (await create(api, SIMPLE))["id"]
+    gateway.emit("switch.pump_1", "on")
+    await asyncio.sleep(0.05)
+    gateway.emit("switch.pump_1", "off")
+    gateway.calls.clear()
+    await asyncio.sleep(0.2)
+
+    assert gateway.commands() == []
+    body = (await api.get(f"/api/machines/{machine_id}")).json()
+    assert body["status"]["pump"]["state"] == "off"
+
+
+async def test_late_on_report_after_watering_is_not_a_fault(
+    api: httpx.AsyncClient, gateway: FakeGateway
+) -> None:
+    """Модуль прислал "on" уже после конца полива: это запоздалый отчёт, не сбой."""
+    machine_id = (await create(api, SIMPLE))["id"]
+    await api.post(f"/api/machines/{machine_id}/water", json={"route_id": "main", "dose_ml": 10})
+    await wait_idle(api, machine_id)
+    gateway.calls.clear()
+
+    gateway.emit("switch.pump_1", "on")
+    gateway.emit("switch.pump_1", "off")
+    await asyncio.sleep(0.2)
+
+    assert gateway.commands() == []
+    problems = (await api.get("/api/problems")).json()
+    assert problems == []
+
+
+async def test_test_pulse_is_not_a_stray_pump(api: httpx.AsyncClient, gateway: FakeGateway) -> None:
+    machine_id = (await create(api, SIMPLE))["id"]
+    gateway.calls.clear()
+
+    pulse = asyncio.create_task(
+        api.post("/api/ha/entities/switch.pump_1/pulse", json={"seconds": 0.3})
+    )
+    await asyncio.sleep(0.05)
+    gateway.emit("switch.pump_1", "on")
+    await asyncio.sleep(0.1)
+    # Пока идёт проверка реле, сторож его не трогает.
+    assert gateway.commands() == ["turn_on switch.pump_1"]
+    await pulse
+    assert gateway.commands() == ["turn_on switch.pump_1", "turn_off switch.pump_1"]
+    problems = (await api.get("/api/problems")).json()
+    assert [p for p in problems if p["machine_id"] == machine_id] == []
+
+
+async def test_watchdog_stops_pump_that_runs_too_long(
+    api: httpx.AsyncClient, gateway: FakeGateway
+) -> None:
+    """Насос, включённый поливом, выключается по пределу работы."""
     config = copy.deepcopy(SIMPLE)
     config["pump"]["max_runtime_s"] = 0.1
     machine_id = (await create(api, config))["id"]
-    gateway.emit("switch.pump_1", "on")
+    entry = api._transport.app.state.registry.entry(machine_id)  # type: ignore[attr-defined]
+    entry.machine.pump.mark_started(datetime.now(UTC))
     gateway.calls.clear()
 
     await asyncio.sleep(0.3)

@@ -44,6 +44,11 @@ Target: 0.2.0. Available in the dev channel.
 
 ### Fixed
 
+- A pump relay that turns on while its machine is not watering is switched off
+  right away. Before, it was taken for a manual start and could run until the
+  pump limit or longer. If the relay does not confirm the off command, watering
+  of that machine is blocked and a problem is raised. A pump turned on by hand in
+  Home Assistant is switched off too.
 - A schedule assigned after its time no longer records a "too late" skip, and
   moving a schedule's time no longer starts a watering right away.
 - After an update the browser loads the new interface instead of a cached one.

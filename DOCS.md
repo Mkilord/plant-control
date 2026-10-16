@@ -125,6 +125,17 @@ A pump model has a run limit per start, 300 s by default. The watchdog stops the
 pump if it runs longer. The limit can be turned off, but then the pump will not
 stop on time if a relay sticks. The pause between waterings gives the pump rest.
 
+If a pump relay turns on while the machine is neither watering nor calibrating,
+PlantControl switches it off right away and opens a problem. This happens when
+an off command gets lost or a module reports its state late. Turning a pump on
+by hand from Home Assistant does not work either: use the **Test** button to
+check a relay. If the relay is still on after three off commands, the machine
+does not water until you sort it out.
+
+If several machines hang on one multi-channel module (Zigbee, Tuya), put them
+into a power group with a pause between starts so the module does not get
+commands at the same moment.
+
 ## Schedules
 
 A plant has either its own schedule or a shared one. Shared schedules live on
