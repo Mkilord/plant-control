@@ -4,10 +4,11 @@
 и для первой проверки на железе: включить и выключить реле руками.
 """
 
+import asyncio
 from typing import Annotated, Any, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from plant_control_addon.ha.client import (
     ConnectListener,
@@ -49,6 +50,10 @@ def get_ha(request: Request) -> HaGateway:
 Ha = Annotated[HaGateway, Depends(get_ha)]
 
 
+class PulseRequest(BaseModel):
+    seconds: float = Field(default=1, ge=0.2, le=5)
+
+
 class EntityOut(BaseModel):
     entity_id: str
     domain: str
@@ -84,6 +89,26 @@ async def turn_on(entity_id: str, ha: Ha) -> None:
 @router.post("/entities/{entity_id}/turn_off", status_code=status.HTTP_204_NO_CONTENT)
 async def turn_off(entity_id: str, ha: Ha) -> None:
     await _switch(ha, entity_id, on=False)
+
+
+@router.post("/entities/{entity_id}/pulse", status_code=status.HTTP_204_NO_CONTENT)
+async def pulse(entity_id: str, body: PulseRequest, ha: Ha, request: Request) -> None:
+    """Проверка реле: включить на секунду и выключить. Нужна в мастере машины.
+
+    Реле занятой машины не трогаем: поливу или калибровке это сорвёт расчёт.
+    """
+    controller = getattr(request.app.state, "controller", None)
+    if controller is not None:
+        for entry in controller.registry.entries():
+            if entity_id in entry.config.entities() and controller.is_busy(entry.id):
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT, f"machine {entry.config.name!r} is busy"
+                )
+    await _switch(ha, entity_id, on=True)
+    try:
+        await asyncio.sleep(body.seconds)
+    finally:
+        await _switch(ha, entity_id, on=False)
 
 
 async def _switch(ha: HaGateway, entity_id: str, *, on: bool) -> None:

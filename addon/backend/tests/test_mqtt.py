@@ -10,6 +10,7 @@ import httpx
 import pytest
 from plant_control.domain.problems import Observation, ProblemBoard, ProblemKind
 
+from plant_control_addon.catalog import PumpModel, TankType
 from plant_control_addon.config import MachineConfig
 from plant_control_addon.controller import Controller, SystemClock
 from plant_control_addon.mqtt.bridge import MqttBridge
@@ -56,7 +57,27 @@ class FakeSession:
 async def registry(tmp_path: Path) -> AsyncIterator[MachineRegistry]:
     registry = MachineRegistry(MachineStore(tmp_path / "test.db"))
     await registry.load()
-    await registry.create(MachineConfig.model_validate(SIMPLE))
+    tank = await registry.create_item(
+        "tank",
+        TankType(name="Бак", **SIMPLE["tank"]),
+    )
+    pump = await registry.create_item(
+        "pump",
+        PumpModel(
+            name="Насос",
+            flow=SIMPLE["pump"]["flow"],
+            max_runtime_s=SIMPLE["pump"]["max_runtime_s"],
+        ),
+    )
+    config = {
+        "name": SIMPLE["name"],
+        "tank_type": tank,
+        "pump": {"model": pump, "entity_id": SIMPLE["pump"]["entity_id"]},
+        "plumbing": SIMPLE["plumbing"],
+        "flow_mode": "advanced",
+        "routes": SIMPLE["routes"],
+    }
+    await registry.create(MachineConfig.model_validate(config))
     yield registry
 
 

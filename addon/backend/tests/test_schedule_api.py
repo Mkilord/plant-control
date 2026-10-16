@@ -196,6 +196,9 @@ async def test_machines_without_a_group_water_at_the_same_time(
         other = copy.deepcopy(slow)
         other["name"] = "Монстера"
         other["pump"]["entity_id"] = "switch.pump_2"
+        # У каждой машины свои клапаны: одно реле не может стоять в двух машинах.
+        other["routes"][0]["valve_entity_id"] = "input_boolean.valve_3"
+        other["routes"][1]["valve_entity_id"] = "input_boolean.valve_4"
         second = (await create(api, other))["id"]
 
         await api.post(f"/api/machines/{first}/water", json={"route_id": "v1", "dose_ml": 100})

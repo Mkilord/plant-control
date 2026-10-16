@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from plant_control_addon.api.app import create_app
-from tests.conftest import FakeGateway, running, settings
+from tests.conftest import FakeGateway, legacy, running, settings
 from tests.test_machines_api import COLLECTOR, wait_idle
 
 # Машина без паспорта насоса: поливает только по калибровке.
@@ -27,7 +27,7 @@ CALIBRATED: dict[str, Any] = {
 
 
 async def create(api: httpx.AsyncClient, config: dict[str, Any]) -> str:
-    response = await api.post("/api/machines", json=config)
+    response = await api.post("/api/machines", json=await legacy(api, config))
     assert response.status_code == 201, response.text
     machine_id: str = response.json()["id"]
     return machine_id
@@ -74,6 +74,8 @@ async def test_new_machine_without_calibration_cannot_water(api: httpx.AsyncClie
             "afterflow_ml": None,
             "calibrated_at": None,
             "due": False,
+            "stale": False,
+            "copied_from": None,
         }
     ]
     response = await api.post(
@@ -86,7 +88,7 @@ async def test_new_machine_without_calibration_cannot_water(api: httpx.AsyncClie
 async def test_advanced_mode_needs_pump_flow(api: httpx.AsyncClient) -> None:
     config = copy.deepcopy(CALIBRATED)
     config["flow_mode"] = "advanced"
-    response = await api.post("/api/machines", json=config)
+    response = await api.post("/api/machines", json=await legacy(api, config))
     assert response.status_code == 422
 
 
@@ -233,7 +235,7 @@ async def test_watering_waits_while_calibrating(api: httpx.AsyncClient) -> None:
         f"/api/machines/{machine_id}/water", json={"route_id": "main", "dose_ml": 100}
     )
     assert response.status_code == 409
-    response = await api.put(f"/api/machines/{machine_id}", json=CALIBRATED)
+    response = await api.put(f"/api/machines/{machine_id}", json=await legacy(api, CALIBRATED))
     assert response.status_code == 409
     await api.delete(f"/api/calibration/sessions/{sid}")
 

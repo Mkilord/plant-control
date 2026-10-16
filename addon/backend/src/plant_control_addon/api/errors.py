@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from plant_control.application.ports import PumpControlError, ValveControlError
 from plant_control.domain.errors import (
     AnotherValveOpenError,
+    CalibrationStaleError,
     CollectorError,
     CollectorStateUnknownError,
     HydraulicsError,
@@ -30,10 +31,13 @@ from plant_control.domain.errors import (
     ValveAlreadyOpenError,
     WateringBlockedError,
 )
+from pydantic import ValidationError
 
+from plant_control_addon.assembly import CatalogMismatchError
 from plant_control_addon.calibration import CalibrationSessionError, UnknownSessionError
+from plant_control_addon.catalog import CatalogItemInUseError, UnknownCatalogItemError
 from plant_control_addon.ha.client import HomeAssistantError
-from plant_control_addon.registry import UnknownMachineError
+from plant_control_addon.registry import EntityInUseError, UnknownMachineError
 
 # Порядок важен: сначала конкретные классы, потом общие.
 STATUS_BY_ERROR: list[tuple[type[Exception], int]] = [
@@ -42,8 +46,12 @@ STATUS_BY_ERROR: list[tuple[type[Exception], int]] = [
     (UnknownValveError, status.HTTP_404_NOT_FOUND),
     (UnknownRequestError, status.HTTP_404_NOT_FOUND),
     (UnknownSessionError, status.HTTP_404_NOT_FOUND),
+    (UnknownCatalogItemError, status.HTTP_404_NOT_FOUND),
+    (CatalogItemInUseError, status.HTTP_409_CONFLICT),
+    (EntityInUseError, status.HTTP_409_CONFLICT),
     (CalibrationSessionError, status.HTTP_409_CONFLICT),
     (RouteNotCalibratedError, status.HTTP_409_CONFLICT),
+    (CalibrationStaleError, status.HTTP_409_CONFLICT),
     # Правило нарушено из-за текущего состояния: позже может получиться.
     (MachineBusyError, status.HTTP_409_CONFLICT),
     (WateringBlockedError, status.HTTP_409_CONFLICT),
@@ -65,6 +73,11 @@ STATUS_BY_ERROR: list[tuple[type[Exception], int]] = [
 
 HANDLED: tuple[type[Exception], ...] = (
     UnknownMachineError,
+    UnknownCatalogItemError,
+    CatalogItemInUseError,
+    EntityInUseError,
+    CatalogMismatchError,
+    ValidationError,
     UnknownSessionError,
     CalibrationSessionError,
     UnknownRequestError,
@@ -87,6 +100,10 @@ async def _handle(request: Request, error: Exception) -> JSONResponse:
         content["problems"] = [
             {"kind": p.kind.value, "target": p.target, "details": p.details} for p in error.problems
         ]
+    if isinstance(error, CatalogItemInUseError):
+        content["machines"] = error.machines
+    if isinstance(error, ValidationError):
+        content["detail"] = error.errors(include_url=False, include_context=False)
     return JSONResponse(status_code=code, content=content)
 
 

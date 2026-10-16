@@ -21,6 +21,8 @@ async def test_lists_only_switchable_entities_sorted(api: httpx.AsyncClient) -> 
         "input_boolean.test_valve",
         "input_boolean.valve_1",
         "input_boolean.valve_2",
+        "input_boolean.valve_3",
+        "input_boolean.valve_4",
         "switch.pump_1",
         "switch.pump_2",
     ]

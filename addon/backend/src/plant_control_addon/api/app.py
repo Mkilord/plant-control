@@ -18,6 +18,7 @@ from plant_control.domain.problems import ProblemBoard
 from pydantic import BaseModel
 
 from plant_control_addon.api.calibration_routes import router as calibration_router
+from plant_control_addon.api.catalog_routes import router as catalog_router
 from plant_control_addon.api.errors import install_error_handlers
 from plant_control_addon.api.ha_routes import HaGateway
 from plant_control_addon.api.ha_routes import router as ha_router
@@ -118,7 +119,7 @@ def create_app(
             store,
             Hooks(
                 actuation=controller.actuation,
-                ensure_can_water=controller.ensure_can_water,
+                ensure_can_water=controller.ensure_can_calibrate,
                 is_watering=controller.is_watering,
                 now=clock.now,
                 sleep=controller.sleep_s,
@@ -186,6 +187,7 @@ def create_app(
     app = FastAPI(title="PlantControl", version="0.1.0", lifespan=lifespan)
     install_error_handlers(app)
     app.include_router(calibration_router)
+    app.include_router(catalog_router)
     app.include_router(ha_router)
     app.include_router(machines_router)
     app.include_router(mqtt_router)

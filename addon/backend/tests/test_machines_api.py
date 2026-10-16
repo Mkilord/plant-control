@@ -10,7 +10,7 @@ import pytest
 
 from plant_control_addon.api.app import create_app
 from plant_control_addon.ha.client import EntityState
-from tests.conftest import FakeGateway, running, settings
+from tests.conftest import FakeGateway, legacy, running, settings
 
 # Простая поливалка: бак 2 л (цилиндр 130 x 151 мм), 500 мл запаса,
 # насос 1000 мл/с, чтобы поливы в тестах шли за доли секунды.
@@ -59,7 +59,7 @@ COLLECTOR: dict[str, Any] = {
 
 
 async def create(api: httpx.AsyncClient, config: dict[str, Any]) -> dict[str, Any]:
-    response = await api.post("/api/machines", json=config)
+    response = await api.post("/api/machines", json=await legacy(api, config))
     assert response.status_code == 201, response.text
     body: dict[str, Any] = response.json()
     return body
@@ -105,14 +105,14 @@ async def test_unknown_machine_is_404(api: httpx.AsyncClient) -> None:
 async def test_collector_route_without_valve_is_rejected(api: httpx.AsyncClient) -> None:
     config = copy.deepcopy(COLLECTOR)
     del config["routes"][0]["valve_entity_id"]
-    response = await api.post("/api/machines", json=config)
+    response = await api.post("/api/machines", json=await legacy(api, config))
     assert response.status_code == 422
 
 
 async def test_reserve_bigger_than_tank_is_rejected(api: httpx.AsyncClient) -> None:
     config = copy.deepcopy(SIMPLE)
     config["tank"]["reserve_ml"] = 5000
-    response = await api.post("/api/machines", json=config)
+    response = await api.post("/api/machines", json=await legacy(api, config))
     assert response.status_code == 422
 
 
@@ -122,7 +122,7 @@ async def test_update_keeps_tank_volume(api: httpx.AsyncClient) -> None:
 
     config = copy.deepcopy(SIMPLE)
     config["name"] = "Фикус на кухне"
-    response = await api.put(f"/api/machines/{machine_id}", json=config)
+    response = await api.put(f"/api/machines/{machine_id}", json=await legacy(api, config))
 
     assert response.status_code == 200
     assert response.json()["config"]["name"] == "Фикус на кухне"

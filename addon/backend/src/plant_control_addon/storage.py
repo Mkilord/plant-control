@@ -5,6 +5,7 @@
 Настройки: ключ и значение (JSON), например настройки уведомлений.
 Журнал поливов: завершённые заявки, чтобы история переживала перезапуск.
 Журнал калибровок: все прогоны и точки замера, а не только итог.
+Справочники: вид записи, id, конфигурация (JSON).
 
 sqlite3 из стандартной библиотеки синхронный, поэтому каждый запрос уходит
 в отдельный поток через asyncio.to_thread, чтобы не блокировать цикл событий.
@@ -68,6 +69,24 @@ CREATE TABLE IF NOT EXISTS calibrations (
 )
 """
 
+CATALOG_SCHEMA = """
+CREATE TABLE IF NOT EXISTS catalog (
+    kind TEXT NOT NULL,
+    id TEXT NOT NULL,
+    config TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (kind, id)
+)
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class StoredCatalogItem:
+    kind: str
+    id: str
+    config_json: str
+
 
 @dataclass(frozen=True, slots=True)
 class StoredCalibration:
@@ -126,6 +145,21 @@ class MachineStore:
         """Калибровки машины, сначала новые."""
         return await asyncio.to_thread(self._load_calibrations, machine_id, limit)
 
+    async def load_catalog(self) -> list[StoredCatalogItem]:
+        return await asyncio.to_thread(self._load_catalog)
+
+    async def save_catalog_item(self, kind: str, item_id: str, config_json: str) -> None:
+        await asyncio.to_thread(self._save_catalog_items, [(kind, item_id, config_json)])
+
+    async def delete_catalog_item(self, kind: str, item_id: str) -> None:
+        await asyncio.to_thread(self._delete_catalog_item, kind, item_id)
+
+    async def apply_migration(
+        self, items: list[tuple[str, str, str]], machines: dict[str, str]
+    ) -> None:
+        """Записи справочников и переписанные машины одной транзакцией."""
+        await asyncio.to_thread(self._apply_migration, items, machines)
+
     async def load_setting(self, key: str) -> str | None:
         """JSON настройки или None, если её ещё не сохраняли."""
         return await asyncio.to_thread(self._load_setting, key)
@@ -146,6 +180,7 @@ class MachineStore:
             db.execute(SETTINGS_SCHEMA)
             db.execute(WATERINGS_SCHEMA)
             db.execute(CALIBRATIONS_SCHEMA)
+            db.execute(CATALOG_SCHEMA)
 
     def _load_all(self) -> list[StoredMachine]:
         with self._connect() as db:
@@ -206,6 +241,44 @@ class MachineStore:
             )
             for row in rows
         ]
+
+    def _load_catalog(self) -> list[StoredCatalogItem]:
+        with self._connect() as db:
+            rows = db.execute("SELECT kind, id, config FROM catalog ORDER BY created_at, id")
+            return [StoredCatalogItem(*row) for row in rows]
+
+    def _save_catalog_items(self, items: list[tuple[str, str, str]]) -> None:
+        with self._connect() as db:
+            self._write_catalog(db, items)
+
+    @staticmethod
+    def _write_catalog(db: sqlite3.Connection, items: list[tuple[str, str, str]]) -> None:
+        now = datetime.now(UTC).isoformat()
+        for kind, item_id, config in items:
+            db.execute(
+                """
+                INSERT INTO catalog (kind, id, config, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(kind, id) DO UPDATE SET
+                    config = excluded.config,
+                    updated_at = excluded.updated_at
+                """,
+                (kind, item_id, config, now, now),
+            )
+
+    def _delete_catalog_item(self, kind: str, item_id: str) -> None:
+        with self._connect() as db:
+            db.execute("DELETE FROM catalog WHERE kind = ? AND id = ?", (kind, item_id))
+
+    def _apply_migration(self, items: list[tuple[str, str, str]], machines: dict[str, str]) -> None:
+        now = datetime.now(UTC).isoformat()
+        with self._connect() as db:
+            self._write_catalog(db, items)
+            for machine_id, config in machines.items():
+                db.execute(
+                    "UPDATE machines SET config = ?, updated_at = ? WHERE id = ?",
+                    (config, now, machine_id),
+                )
 
     def _load_setting(self, key: str) -> str | None:
         with self._connect() as db:

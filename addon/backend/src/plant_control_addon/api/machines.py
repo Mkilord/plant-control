@@ -14,10 +14,12 @@ from pydantic import BaseModel, Field
 
 from plant_control_addon.api.queue_routes import QueueItemOut, queue_item_out
 from plant_control_addon.config import (
+    ENTITY_PATTERN,
     FlowPointConfig,
     FlowSuggestionState,
     MachineConfig,
     ScheduleConfig,
+    ScheduleLinkConfig,
 )
 from plant_control_addon.controller import Controller
 from plant_control_addon.registry import MachineEntry, MachineRegistry
@@ -64,6 +66,8 @@ class WateringResultOut(BaseModel):
 
 class ScheduleStatus(BaseModel):
     route_id: str
+    # Расписание из справочника. None - своё расписание растения.
+    template: str | None = None
     enabled: bool
     dose_ml: float
     next_run_at: datetime | None
@@ -95,6 +99,10 @@ class RouteFlowStatus(BaseModel):
     calibrated_at: datetime | None = None
     # Пора калибровать заново (если включено напоминание).
     due: bool = False
+    # Насос, бак или трубки поменялись после замера: поливать нельзя.
+    stale: bool = False
+    # Калибровка пришла вместе с копией машины: имя исходной машины.
+    copied_from: str | None = None
 
 
 class MachineStatus(BaseModel):
@@ -157,6 +165,15 @@ class StopOut(BaseModel):
     errors: list[str]
 
 
+class CopyRequest(BaseModel):
+    """Копия машины: своё имя и свои реле, остальное как у исходной."""
+
+    name: str = Field(min_length=1, max_length=100)
+    pump_entity_id: str = Field(pattern=ENTITY_PATTERN)
+    # Реле клапана для каждого растения (id маршрута -> сущность).
+    valves: dict[str, str] = {}
+
+
 def route_flows(
     entry: MachineEntry, now: datetime, reminder_weeks: int | None
 ) -> list[RouteFlowStatus]:
@@ -164,6 +181,7 @@ def route_flows(
     machine = entry.machine
     base = config.base_route_config()
     result: list[RouteFlowStatus] = []
+    stale = entry.stale_routes
     for route in config.routes:
         if config.flow_mode == "advanced":
             result.append(RouteFlowStatus(route_id=route.id, source="advanced"))
@@ -197,6 +215,12 @@ def route_flows(
                 afterflow_ml=profile.afterflow_ml,
                 calibrated_at=calibrated_at,
                 due=due,
+                stale=route.id in stale,
+                copied_from=(
+                    source_route.calibration.copied_from
+                    if source_route and source_route.calibration
+                    else None
+                ),
             )
         )
     return result
@@ -240,6 +264,7 @@ def machine_out(entry: MachineEntry, control: Controller | None = None) -> Machi
             schedules=[
                 ScheduleStatus(
                     route_id=route_id,
+                    template=_template(entry, route_id),
                     enabled=schedule.enabled,
                     dose_ml=schedule.dose_ml,
                     next_run_at=schedule.next_run_at(now),
@@ -268,6 +293,11 @@ def machine_out(entry: MachineEntry, control: Controller | None = None) -> Machi
     )
 
 
+def _template(entry: MachineEntry, route_id: str) -> str | None:
+    link = entry.config.route(route_id).schedule_link
+    return link.template if link else None
+
+
 router = APIRouter(prefix="/api/machines", tags=["machines"])
 
 # --- CRUD ---
@@ -282,6 +312,18 @@ async def list_machines(registry: Registry, control: Control) -> list[MachineOut
 async def create_machine(config: MachineConfig, registry: Registry, control: Control) -> MachineOut:
     entry = await registry.create(config)
     await control.safe_start(entry.id)
+    await control.recheck()
+    return machine_out(entry, control)
+
+
+@router.post("/{machine_id}/copy", status_code=status.HTTP_201_CREATED)
+async def copy_machine(
+    machine_id: str, body: CopyRequest, registry: Registry, control: Control
+) -> MachineOut:
+    """Копия с теми же справочниками, трубками и калибровкой. Перекалибровка не нужна."""
+    entry = await registry.copy(machine_id, body.name, body.pump_entity_id, body.valves)
+    await control.safe_start(entry.id)
+    await control.recheck()
     return machine_out(entry, control)
 
 
@@ -299,6 +341,8 @@ async def update_machine(
     entry = await registry.update(machine_id, config)
     # Реле могли поменяться: привести новое железо в безопасное состояние.
     await control.safe_start(machine_id)
+    # Калибровка могла устареть: показать сразу.
+    await control.recheck()
     return machine_out(entry, control)
 
 
@@ -366,9 +410,38 @@ async def set_schedule(
     return machine_out(entry, control)
 
 
+@router.put("/{machine_id}/routes/{route_id}/schedule-link")
+async def link_schedule(
+    machine_id: str,
+    route_id: str,
+    body: ScheduleLinkConfig,
+    registry: Registry,
+    control: Control,
+) -> MachineOut:
+    """Поливать растение по расписанию из справочника. Своё расписание при этом убирается."""
+    entry = await registry.set_schedule(machine_id, route_id, None, body)
+    return machine_out(entry, control)
+
+
 @router.delete("/{machine_id}/routes/{route_id}/schedule")
 async def clear_schedule(
     machine_id: str, route_id: str, registry: Registry, control: Control
 ) -> MachineOut:
+    """Убрать расписание растения: и своё, и ссылку на справочник."""
     entry = await registry.set_schedule(machine_id, route_id, None)
+    return machine_out(entry, control)
+
+
+# --- Калибровка после изменения железа ---
+
+
+@router.post("/{machine_id}/routes/{route_id}/calibration/accept")
+async def accept_calibration(
+    machine_id: str, route_id: str, registry: Registry, control: Control
+) -> MachineOut:
+    """Оставить калибровку: изменение железа на расход не влияет. Пишется в журнал."""
+    if control.is_busy(machine_id):
+        raise MachineBusyError(f"machine {machine_id!r} is busy")
+    entry = await registry.accept_calibration(machine_id, route_id)
+    await control.recheck()
     return machine_out(entry, control)

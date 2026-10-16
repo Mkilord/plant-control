@@ -473,7 +473,7 @@ class CalibrationManager:
             return None
         now = self._monotonic()
         entry = self._registry.entry(session.machine_id)
-        limit = session.run_started + entry.machine.pump.passport.max_runtime.total_seconds()
+        limit = session.run_started + run_limit_s(entry)
         deadline = min(limit, session.deadline) if session.deadline is not None else limit
         return max(0.0, deadline - now)
 
@@ -504,6 +504,8 @@ class CalibrationManager:
             old = route.calibration
             if old is None:
                 raise CalibrationError("route has no calibration to add a level to")
+            if route.id in entry.stale_routes:
+                raise CalibrationError("calibration of the route is stale, replace it")
             first = old.flow_points[0]
             capacity = entry.machine.tank.geometry.capacity_ml()
             gap = abs(first.tank_volume_ml - reference) / capacity * 100
@@ -565,7 +567,7 @@ class CalibrationManager:
             await self._hooks.ensure_can_water(session.machine_id, session.route_id)
             pump = entry.machine.pump
             now = self._hooks.now()
-            limit = pump.passport.max_runtime
+            limit = timedelta(seconds=run_limit_s(entry))
             duration = timedelta(seconds=planned_s) if planned_s is not None else limit
             if planned_s is not None and duration > limit:
                 raise PumpRuntimeExceededError(
@@ -594,7 +596,7 @@ class CalibrationManager:
                 if valve_id is not None:
                     assert entry.machine.collector is not None
                     await actuation.open_valve(entry.machine.collector, valve_id)
-                    await self._hooks.sleep(entry.config.timings.valve_lead_s)
+                    await self._hooks.sleep(entry.setup.timings.valve_lead_s)
                 await actuation.start_pump(pump)
             except Exception:
                 await self._shut_down(entry, session.route_id)
@@ -643,7 +645,7 @@ class CalibrationManager:
         valve_id = entry.machine.valve_for(route_id)
         if valve_id is not None and collector is not None:
             if collector.valve_state(valve_id) is not ValveState.CLOSED:
-                await self._hooks.sleep(entry.config.timings.valve_lag_s)
+                await self._hooks.sleep(entry.setup.timings.valve_lag_s)
             valve_error = await actuation.close_valve(collector, valve_id)
             if valve_error is not None:
                 errors.append(valve_error)
@@ -673,7 +675,7 @@ class CalibrationManager:
         silent = now - session.last_heartbeat
         if session.state is SessionState.RUNNING:
             entry = self._registry.entry(session.machine_id)
-            limit = entry.machine.pump.passport.max_runtime.total_seconds()
+            limit = run_limit_s(entry)
             if silent > self.settings.heartbeat_timeout_s:
                 await self._stop(session, StopReason.HEARTBEAT)
             elif session.deadline is not None and now > session.deadline:
@@ -686,6 +688,15 @@ class CalibrationManager:
 
 
 _watchers: set[asyncio.Task[None]] = set()
+
+# Предел прогона калибровки, если у насоса предел работы выключен.
+# Замер дольше 10 минут не нужен, а насос без присмотра оставлять нельзя.
+UNLIMITED_PUMP_RUN_S = 600.0
+
+
+def run_limit_s(entry: MachineEntry) -> float:
+    limit = entry.machine.pump.passport.max_runtime
+    return UNLIMITED_PUMP_RUN_S if limit is None else limit.total_seconds()
 
 
 def _without_supply(result: RunResult, supply_ml: float) -> RunResult:

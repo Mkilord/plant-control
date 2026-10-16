@@ -31,6 +31,8 @@ class FakeGateway:
             # Клапаны коллектора из тестов: без них полив был бы запрещён.
             EntityState("input_boolean.valve_1", "off", "Valve 1"),
             EntityState("input_boolean.valve_2", "off", "Valve 2"),
+            EntityState("input_boolean.valve_3", "off", "Valve 3"),
+            EntityState("input_boolean.valve_4", "off", "Valve 4"),
         ]
         self.calls: list[tuple[str, str, str]] = []
         self.offline = False
@@ -125,3 +127,73 @@ class running:
         assert self._client is not None
         await self._client.aclose()
         await self._lifespan.__aexit__(None, None, None)
+
+
+async def legacy(api: httpx.AsyncClient, old: dict[str, Any]) -> dict[str, Any]:
+    """Машина в старом формате (бак и насос внутри) -> новый формат со ссылками.
+
+    Записи справочников создаются через API. Одинаковые настройки дают одну запись,
+    как при миграции: так правка машины без изменения насоса не меняет его id.
+    """
+    import json
+
+    if "tank_type" in old:
+        return old
+    cache: dict[tuple[str, str], str] = api.__dict__.setdefault("_catalog_cache", {})
+
+    async def item(kind: str, body: dict[str, Any]) -> str:
+        key = (kind, json.dumps(body, sort_keys=True))
+        if key not in cache:
+            response = await api.post(f"/api/catalog/{kind}", json=body)
+            assert response.status_code == 201, response.text
+            cache[key] = response.json()["id"]
+        return cache[key]
+
+    tank = old["tank"]
+    pump = old["pump"]
+    new: dict[str, Any] = {
+        "name": old["name"],
+        "tank_type": await item(
+            "tank",
+            {"name": "Бак", "geometry": tank["geometry"], "reserve_ml": tank.get("reserve_ml", 0)},
+        ),
+        "pump": {
+            "model": await item(
+                "pump",
+                {
+                    "name": "Насос",
+                    "flow": pump.get("flow"),
+                    "max_runtime_s": pump.get("max_runtime_s", 300),
+                    "cooldown_s": pump.get("cooldown_s", 0),
+                },
+            ),
+            "entity_id": pump["entity_id"],
+        },
+        "plumbing": dict(old["plumbing"]),
+        "routes": old["routes"],
+    }
+    for key in ("head_model", "base_route"):
+        if key in old:
+            new[key] = old[key]
+    new["flow_mode"] = old.get("flow_mode", "advanced")
+    if old["plumbing"]["type"] == "collector":
+        timings = old.get("timings") or {}
+        new["plumbing"]["collector_type"] = await item(
+            "collector",
+            {
+                "name": "Коллектор",
+                "outlets": max(2, len(old["routes"])),
+                "valve_lead_s": timings.get("valve_lead_s", 0.5),
+                "valve_lag_s": timings.get("valve_lag_s", 0.5),
+            },
+        )
+    if old.get("power_group"):
+        new["power_group"] = await item(
+            "power",
+            {
+                "name": old["power_group"],
+                "max_concurrent": old.get("power_limit", 1),
+                "min_start_gap_s": old.get("power_gap_s", 2),
+            },
+        )
+    return new

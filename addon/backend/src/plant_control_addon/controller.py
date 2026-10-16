@@ -24,7 +24,7 @@ from plant_control.application.queue import (
 from plant_control.application.safety_service import SafetyService
 from plant_control.application.watering_service import WateringService, WateringTimings
 from plant_control.domain.errors import MachineBusyError, WateringBlockedError
-from plant_control.domain.problems import Problem
+from plant_control.domain.problems import Problem, ProblemKind
 from plant_control.domain.pump import PumpState
 from plant_control.domain.watering import WateringPlan
 
@@ -38,6 +38,8 @@ if TYPE_CHECKING:
     from plant_control_addon.calibration import CalibrationManager
 
 log = logging.getLogger(__name__)
+
+CALIBRATION_IGNORES = frozenset({ProblemKind.CALIBRATION_STALE})
 
 
 class SystemClock:
@@ -106,14 +108,14 @@ class Controller:
     # --- Сервисы ядра для конкретной машины ---
 
     def _ports(self, entry: MachineEntry) -> tuple[HaPumpControl, HaValveControl]:
-        resolve = entry.config.entity_for
+        resolve = entry.setup.entity_for
         return HaPumpControl(self._ha, resolve), HaValveControl(self._ha, resolve)
 
     def _watering(self, entry: MachineEntry) -> WateringService:
         pumps, valves = self._ports(entry)
         timings = WateringTimings(
-            valve_lead=timedelta(seconds=entry.config.timings.valve_lead_s),
-            valve_lag=timedelta(seconds=entry.config.timings.valve_lag_s),
+            valve_lead=timedelta(seconds=entry.setup.timings.valve_lead_s),
+            valve_lag=timedelta(seconds=entry.setup.timings.valve_lag_s),
         )
         return WateringService(self._registry, pumps, valves, self._clock, self._sleeper, timings)
 
@@ -148,7 +150,12 @@ class Controller:
         request = self.queue.submit(machine_id, route_id, dose_ml, source=source)
         return plan, request
 
-    def blockers(self, machine_id: str, route_id: str | None = None) -> list[Problem]:
+    def blockers(
+        self,
+        machine_id: str,
+        route_id: str | None = None,
+        ignore: frozenset[ProblemKind] = frozenset(),
+    ) -> list[Problem]:
         """Открытые проблемы, из-за которых поливать нельзя. route_id - только для растения."""
         if self._health is None:
             return []
@@ -158,9 +165,15 @@ class Controller:
             valve_id = self._registry.entry(machine_id).machine.valve_for(route_id)
             if valve_id is not None:
                 targets.add(valve_id)
-        return self._health.board.blocking_for(machine_id, self._clock.now(), targets)
+        problems = self._health.board.blocking_for(machine_id, self._clock.now(), targets)
+        return [problem for problem in problems if problem.kind not in ignore]
 
-    async def ensure_can_water(self, machine_id: str, route_id: str) -> None:
+    async def ensure_can_water(
+        self,
+        machine_id: str,
+        route_id: str,
+        ignore: frozenset[ProblemKind] = frozenset(),
+    ) -> None:
         """Проверить состояние прямо сейчас и отказать, если полив невозможен.
 
         Проверка свежая, а не из последнего круга: насос мог пропасть секунду назад.
@@ -169,10 +182,14 @@ class Controller:
         if self._health is None:
             return
         await self.check_health()
-        problems = self.blockers(machine_id, route_id)
+        problems = self.blockers(machine_id, route_id, ignore)
         if problems:
             kinds = ", ".join(problem.kind.value for problem in problems)
             raise WateringBlockedError(f"watering is blocked: {kinds}", problems)
+
+    async def ensure_can_calibrate(self, machine_id: str, route_id: str) -> None:
+        """Как для полива, только устаревшая калибровка не мешает: её и меняют."""
+        await self.ensure_can_water(machine_id, route_id, CALIBRATION_IGNORES)
 
     def is_busy(self, machine_id: str) -> bool:
         """Занята, если поливает, ждёт своей очереди или калибруется."""
@@ -276,7 +293,7 @@ class Controller:
         await self._cancel_watering(entry)
         errors = await self._safety(entry).emergency_stop(machine_id)
         # Стоп мог снять "состояние насоса неизвестно": обновить проблемы сразу.
-        await self._recheck()
+        await self.recheck()
         return errors
 
     async def safe_start(self, machine_id: str) -> list[Exception]:
@@ -299,7 +316,7 @@ class Controller:
         else:
             entry.machine.tank.fill(volume_ml)
         await self._registry.save(entry.machine)
-        await self._recheck()
+        await self.recheck()
 
     async def set_tank_volume(self, machine_id: str, volume_ml: float) -> None:
         entry = self._registry.entry(machine_id)
@@ -311,7 +328,7 @@ class Controller:
             log.info("flow of %s looks off by x%.2f", machine_id, suggestion.factor)
             entry.flow_suggestion = FlowSuggestionState.of(suggestion)
         await self._registry.save(entry.machine)
-        await self._recheck()
+        await self.recheck()
 
     async def shutdown(self) -> None:
         if self.calibration is not None:
@@ -356,7 +373,7 @@ class Controller:
         await self._notify_problems(report)
         return report
 
-    async def _recheck(self) -> None:
+    async def recheck(self) -> None:
         """Проверка после действия человека: не должна ломать само действие."""
         try:
             await self.check_health()

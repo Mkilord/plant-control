@@ -1,10 +1,14 @@
 """Конфигурация машины (то, что правится через CRUD) и её состояние.
 
-Конфигурация: форма бака, насос и его реле, обвязка, маршруты.
+MachineConfig - то, что хранится и правится: ссылки на записи справочников
+(тип бака, модель насоса, тип коллектора, группа питания), трубки, растения,
+сущности HA, калибровка.
+MachineSetup - та же машина с подставленными записями справочников. Её собирает
+assembly.resolve, по ней работают сборка домена, полив и калибровка.
 Состояние: сколько воды, включён ли насос, открыты ли клапаны. Меняется только
 операциями домена (полив, долив, аварийный стоп), через CRUD его не поправить.
 
-build_machine собирает доменную машину из конфигурации и состояния,
+build_machine собирает доменную машину из MachineSetup и состояния,
 state_of снимает состояние обратно для сохранения.
 """
 
@@ -16,9 +20,8 @@ from plant_control.domain.collector import Collector, Valve, ValveState
 from plant_control.domain.connection import Connection, Outlet, Route
 from plant_control.domain.flow import ConstantFlow, FlowCurve, LinearFlow, TableFlow
 from plant_control.domain.machine import WateringMachine
-from plant_control.domain.power import PowerGroup, solo_group
 from plant_control.domain.pump import Pump, PumpPassport, PumpState
-from plant_control.domain.schedule import DailyTime, IntervalRule, Rule, Schedule, WeeklyRule
+from plant_control.domain.schedule import DailyTime, IntervalRule, Rule, WeeklyRule
 from plant_control.domain.tank import (
     HorizontalCylinder,
     MeasuredTank,
@@ -117,11 +120,21 @@ FlowConfig = Annotated[
 
 
 class PumpConfig(BaseModel):
+    """Насос машины с подставленной моделью."""
+
     entity_id: str = Field(pattern=ENTITY_PATTERN)
     # Паспортная модель расхода. Нужна только в расширенном режиме (flow_mode="advanced").
     flow: FlowConfig | None = None
-    max_runtime_s: float = Field(gt=0)
+    # None - предел работы выключен.
+    max_runtime_s: float | None = Field(default=None, gt=0)
     cooldown_s: float = Field(default=0, ge=0)
+
+
+class PumpBinding(BaseModel):
+    """Насос в машине: модель из справочника и реле в HA."""
+
+    model: str = Field(min_length=1)
+    entity_id: str = Field(pattern=ENTITY_PATTERN)
 
 
 # --- Расписание ---
@@ -148,7 +161,7 @@ RuleConfig = Annotated[WeeklyRuleConfig | IntervalRuleConfig, Field(discriminato
 
 
 class ScheduleConfig(BaseModel):
-    """Расписание одного растения. dose_ml не задана - берётся доза маршрута."""
+    """Своё расписание одного растения. dose_ml не задана - берётся доза маршрута."""
 
     enabled: bool = True
     rule: RuleConfig
@@ -159,6 +172,13 @@ class ScheduleConfig(BaseModel):
     catch_up_h: float = Field(default=3, ge=0)
     # Не поливать по расписанию, если недавно полили вручную.
     min_gap_h: float = Field(default=6, ge=0)
+
+
+class ScheduleLinkConfig(BaseModel):
+    """Растение поливается по расписанию из справочника."""
+
+    template: str = Field(min_length=1)
+    enabled: bool = True
 
 
 # --- Обвязка и маршруты ---
@@ -199,6 +219,11 @@ class RouteCalibrationConfig(BaseModel):
     spread_pct: float | None = None
     # Запись в журнале калибровок, из которой взят результат.
     record_id: int | None = None
+    # На чём сделан замер: насос, бак, обвязка, трубки (assembly.fingerprint).
+    # Не совпадает с текущим - калибровка устарела. None - ещё не посчитан.
+    fingerprint: str | None = None
+    # Калибровка скопирована вместе с машиной: имя исходной машины.
+    copied_from: str | None = None
 
     def profile(self) -> FlowProfile:
         return FlowProfile(
@@ -215,6 +240,8 @@ class DirectPlumbingConfig(BaseModel):
 
 class CollectorPlumbingConfig(BaseModel):
     type: Literal["collector"] = "collector"
+    # Тип коллектора из справочника.
+    collector_type: str = Field(min_length=1)
     supply: ConnectionConfig
 
 
@@ -237,7 +264,15 @@ class RouteConfig(BaseModel):
     calibration: RouteCalibrationConfig | None = None
     # Доза по умолчанию: ей поливает кнопка в Home Assistant и интерфейс.
     default_dose_ml: float = Field(default=100, gt=0)
+    # Своё расписание или ссылка на расписание из справочника, не то и другое сразу.
     schedule: ScheduleConfig | None = None
+    schedule_link: ScheduleLinkConfig | None = None
+
+    @model_validator(mode="after")
+    def one_schedule(self) -> Self:
+        if self.schedule is not None and self.schedule_link is not None:
+            raise ValueError("route has both its own schedule and a schedule from the catalog")
+        return self
 
 
 class TimingsConfig(BaseModel):
@@ -248,49 +283,91 @@ class TimingsConfig(BaseModel):
 # --- Машина ---
 
 
-class MachineConfig(BaseModel):
+def _check_routes(
+    routes: list[RouteConfig],
+    plumbing: PlumbingConfig,
+    base_route: str | None,
+    pump_entity: str,
+) -> None:
+    ids = [route.id for route in routes]
+    if len(set(ids)) != len(ids):
+        raise ValueError("route ids must be unique")
+    if base_route is not None and base_route not in ids:
+        raise ValueError("base_route must be one of the routes")
+    valves = [route.valve_entity_id for route in routes]
+    if isinstance(plumbing, CollectorPlumbingConfig):
+        if any(valve is None for valve in valves):
+            raise ValueError("with a collector every route needs valve_entity_id")
+        if len(set(valves)) != len(valves):
+            raise ValueError("valve entities must be unique")
+        if pump_entity in valves:
+            raise ValueError("pump and valve cannot share an entity")
+    else:
+        if len(routes) != 1:
+            raise ValueError("without a collector there must be exactly one route")
+        if valves[0] is not None:
+            raise ValueError("without a collector routes have no valve_entity_id")
+
+
+class _Routes(BaseModel):
+    """Общее у хранимой и собранной конфигурации: обвязка и маршруты."""
+
     name: str = Field(min_length=1, max_length=100)
-    tank: TankConfig
-    pump: PumpConfig
     plumbing: PlumbingConfig
     head_model: Literal["start", "mid", "stepwise"] = "mid"
     # calibrated - полив по калибровке маршрутов; advanced - по паспорту насоса и напору.
-    # Старые машины без поля остаются на паспорте: их поведение не меняется.
-    flow_mode: Literal["calibrated", "advanced"] = "advanced"
+    flow_mode: Literal["calibrated", "advanced"] = "calibrated"
     # Маршрут, расход которого наследуют маршруты без своего замера.
     # None - первый откалиброванный.
     base_route: str | None = Field(default=None, pattern=ROUTE_ID_PATTERN)
     routes: list[RouteConfig] = Field(min_length=1)
-    timings: TimingsConfig = TimingsConfig()
-    # Группа питания: машины одной группы делят блок питания. Пусто - машина сама по себе.
-    power_group: str = Field(default="", max_length=32)
-    # Сколько машин группы могут поливать разом: 1 - строго по очереди.
-    power_limit: int = Field(default=1, ge=1)
-    # Пауза между пусками в группе: пусковой ток одного насоса не должен совпасть с другим.
-    power_gap_s: float = Field(default=2, ge=0)
+
+    def route(self, route_id: str) -> RouteConfig:
+        for route in self.routes:
+            if route.id == route_id:
+                return route
+        raise KeyError(route_id)
+
+    def base_route_config(self) -> RouteConfig | None:
+        """Откалиброванный маршрут, от которого наследуют остальные."""
+        if self.base_route is not None:
+            route = self.route(self.base_route)
+            if route.calibration is not None:
+                return route
+        return next((route for route in self.routes if route.calibration is not None), None)
+
+
+class MachineConfig(_Routes):
+    """Машина как её хранят и правят: ссылки на справочники плюс своё."""
+
+    tank_type: str = Field(min_length=1)
+    pump: PumpBinding
+    # Группа питания из справочника. None - машина сама по себе.
+    power_group: str | None = None
 
     @model_validator(mode="after")
     def check_routes(self) -> Self:
-        ids = [route.id for route in self.routes]
-        if len(set(ids)) != len(ids):
-            raise ValueError("route ids must be unique")
-        if self.base_route is not None and self.base_route not in ids:
-            raise ValueError("base_route must be one of the routes")
+        _check_routes(self.routes, self.plumbing, self.base_route, self.pump.entity_id)
+        return self
+
+    def entities(self) -> list[str]:
+        """Сущности HA машины: насос и клапаны."""
+        valves = [route.valve_entity_id for route in self.routes if route.valve_entity_id]
+        return [self.pump.entity_id, *valves]
+
+
+class MachineSetup(_Routes):
+    """Машина с подставленными записями справочников. Сама не хранится."""
+
+    tank: TankConfig
+    pump: PumpConfig
+    timings: TimingsConfig = TimingsConfig()
+
+    @model_validator(mode="after")
+    def check_routes(self) -> Self:
+        _check_routes(self.routes, self.plumbing, self.base_route, self.pump.entity_id)
         if self.flow_mode == "advanced" and self.pump.flow is None:
             raise ValueError("advanced flow mode needs a pump flow model")
-        valves = [route.valve_entity_id for route in self.routes]
-        if isinstance(self.plumbing, CollectorPlumbingConfig):
-            if any(valve is None for valve in valves):
-                raise ValueError("with a collector every route needs valve_entity_id")
-            if len(set(valves)) != len(valves):
-                raise ValueError("valve entities must be unique")
-            if self.pump.entity_id in valves:
-                raise ValueError("pump and valve cannot share an entity")
-        else:
-            if len(self.routes) != 1:
-                raise ValueError("without a collector there must be exactly one route")
-            if valves[0] is not None:
-                raise ValueError("without a collector routes have no valve_entity_id")
         return self
 
     def entity_for(self, device_id: str) -> str:
@@ -301,20 +378,6 @@ class MachineConfig(BaseModel):
             if route.id == device_id and route.valve_entity_id is not None:
                 return route.valve_entity_id
         raise KeyError(device_id)
-
-    def route(self, route_id: str) -> "RouteConfig":
-        for route in self.routes:
-            if route.id == route_id:
-                return route
-        raise KeyError(route_id)
-
-    def base_route_config(self) -> "RouteConfig | None":
-        """Откалиброванный маршрут, от которого наследуют остальные."""
-        if self.base_route is not None:
-            route = self.route(self.base_route)
-            if route.calibration is not None:
-                return route
-        return next((route for route in self.routes if route.calibration is not None), None)
 
 
 class FlowSuggestionState(BaseModel):
@@ -395,7 +458,7 @@ def tube_volume_ml(cfg: ConnectionConfig) -> float:
     return _connection(cfg).dead_volume_ml
 
 
-def route_profiles(config: MachineConfig) -> dict[str, FlowProfile]:
+def route_profiles(config: _Routes) -> dict[str, FlowProfile]:
     """Профили маршрутов: свой замер или унаследованный от базового маршрута.
 
     Маршрут без своего замера и без базового в словарь не попадает:
@@ -424,7 +487,12 @@ def _head_model(name: str) -> HeadModel:
             return MidDoseHead()
 
 
-def build_machine(machine_id: str, config: MachineConfig, state: MachineState) -> WateringMachine:
+def build_machine(
+    machine_id: str,
+    config: MachineSetup,
+    state: MachineState,
+    stale_routes: frozenset[str] = frozenset(),
+) -> WateringMachine:
     """Бросает доменные ошибки, если конфигурация физически невозможна
     (например, запас больше бака)."""
     geometry = _geometry(config.tank.geometry)
@@ -438,7 +506,11 @@ def build_machine(machine_id: str, config: MachineConfig, state: MachineState) -
         PUMP_ID,
         PumpPassport(
             flow=None if calibrated or pump_flow is None else _flow(pump_flow),
-            max_runtime=timedelta(seconds=config.pump.max_runtime_s),
+            max_runtime=(
+                None
+                if config.pump.max_runtime_s is None
+                else timedelta(seconds=config.pump.max_runtime_s)
+            ),
             cooldown=timedelta(seconds=config.pump.cooldown_s),
         ),
         state=PumpState(state.pump_state),
@@ -478,6 +550,7 @@ def build_machine(machine_id: str, config: MachineConfig, state: MachineState) -
             waterings=state.tracker_waterings,
             valid=state.tracker_valid,
         ),
+        stale_routes=stale_routes,
     )
 
 
@@ -499,61 +572,11 @@ def state_of(machine: WateringMachine) -> MachineState:
     )
 
 
-def _rule(cfg: RuleConfig) -> Rule:
+def rule_of(cfg: RuleConfig, today: date | None = None) -> Rule:
     times = tuple(DailyTime(t.hour, t.minute) for t in cfg.times)
     match cfg:
         case WeeklyRuleConfig():
             return WeeklyRule(days=frozenset(cfg.days), times=times)
         case IntervalRuleConfig():
             # Без даты начала считаем от сегодня: "каждые 3 дня, начиная с сегодня".
-            return IntervalRule(cfg.every_days, times, cfg.start_date or date.today())
-
-
-def build_schedule(
-    machine_id: str,
-    route: RouteConfig,
-    timezone: str,
-    last_run_at: datetime | None = None,
-) -> Schedule | None:
-    """Расписание маршрута. None - расписания нет."""
-    cfg = route.schedule
-    if cfg is None:
-        return None
-    return Schedule(
-        f"{machine_id}:{route.id}",
-        machine_id=machine_id,
-        route_id=route.id,
-        dose_ml=cfg.dose_ml or route.default_dose_ml,
-        rule=_rule(cfg.rule),
-        timezone=timezone,
-        enabled=cfg.enabled,
-        catch_up=timedelta(hours=cfg.catch_up_h),
-        min_gap_after_watering=timedelta(hours=cfg.min_gap_h),
-        season_factor=cfg.season_factor,
-        last_run_at=last_run_at,
-    )
-
-
-def build_schedules(
-    machine_id: str, config: MachineConfig, state: MachineState, timezone: str
-) -> dict[str, Schedule]:
-    schedules = {}
-    for route in config.routes:
-        schedule = build_schedule(machine_id, route, timezone, state.schedule_runs.get(route.id))
-        if schedule is not None:
-            schedules[route.id] = schedule
-    return schedules
-
-
-def power_group_of(machine_id: str, configs: dict[str, MachineConfig]) -> PowerGroup:
-    """Группа питания машины. Предел берём самый строгий из заявленных её участниками."""
-    config = configs.get(machine_id)
-    if config is None or not config.power_group:
-        return solo_group(machine_id)
-    members = [c for c in configs.values() if c.power_group == config.power_group]
-    return PowerGroup(
-        id=config.power_group,
-        name=config.power_group,
-        max_concurrent=min(c.power_limit for c in members),
-        min_start_gap=timedelta(seconds=max(c.power_gap_s for c in members)),
-    )
+            return IntervalRule(cfg.every_days, times, cfg.start_date or today or date.today())
