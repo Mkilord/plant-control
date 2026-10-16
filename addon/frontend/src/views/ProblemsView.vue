@@ -116,6 +116,14 @@ onUnmounted(() => window.clearInterval(timer));
         </div>
 
         <footer class="actions">
+          <template v-if="problem.kind === 'calibration_stale'">
+            <RouterLink class="button primary" :to="`/machines/${problem.machine_id}/calibrate?route=${problem.target}`">
+              <AppIcon name="pump" />{{ t("calib.recalibrate") }}
+            </RouterLink>
+            <button @click="act(() => api.acceptCalibration(problem.machine_id, problem.target))">
+              {{ t("calib.keep") }}
+            </button>
+          </template>
           <RouterLink class="button" :to="`/machines/${problem.machine_id}`">
             <AppIcon name="edit" />{{ t("problems.open_machine") }}
           </RouterLink>

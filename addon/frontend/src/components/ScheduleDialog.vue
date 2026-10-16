@@ -1,35 +1,24 @@
 <script setup lang="ts">
-// Расписание одного растения: по дням недели или с интервалом в днях.
-import { computed, ref, watch } from "vue";
+// Расписание одного растения: из справочника (общее для многих растений) или своё.
+import { computed, onMounted, ref, watch } from "vue";
 import { api, errorText, type Machine, type Rule, type ScheduleConfig } from "../api";
-import { time } from "../format";
+import { clone, entriesOf, findEntry, loadCatalog, summary } from "../catalog";
+import { ml, time } from "../format";
 import { t } from "../i18n";
 import AppIcon from "./AppIcon.vue";
 import FormField from "./FormField.vue";
 import ModalDialog from "./ModalDialog.vue";
 import NumField from "./NumField.vue";
+import RuleFields from "./RuleFields.vue";
 
 const props = defineProps<{ machine: Machine }>();
 const emit = defineEmits<{ close: []; changed: [] }>();
 
-// Ключи подписей дней: так проверка типов видит, что такие ключи в словаре есть.
-const WEEKDAYS = [
-  { day: 0, label: "weekday.0" },
-  { day: 1, label: "weekday.1" },
-  { day: 2, label: "weekday.2" },
-  { day: 3, label: "weekday.3" },
-  { day: 4, label: "weekday.4" },
-  { day: 5, label: "weekday.5" },
-  { day: 6, label: "weekday.6" },
-] as const;
-
 const routeId = ref(props.machine.config.routes[0].id);
-const kind = ref<"weekly" | "interval">("weekly");
+const mode = ref<"template" | "own">("template");
+const template = ref("");
 const enabled = ref(true);
-const days = ref<number[]>([0, 3]);
-const everyDays = ref(3);
-const startDate = ref("");
-const times = ref<string[]>(["08:00"]);
+const rule = ref<Rule>({ type: "weekly", days: [0, 3], times: ["08:00"] });
 const dose = ref<number | null>(null);
 const seasonFactor = ref(1);
 const catchUpH = ref(3);
@@ -43,75 +32,62 @@ const route = computed(
 const status = computed(() =>
   props.machine.status.schedules.find((s) => s.route_id === routeId.value),
 );
+const templates = computed(() => entriesOf("schedule"));
+const chosen = computed(() => findEntry("schedule", template.value));
+const hasSchedule = computed(() => Boolean(route.value.schedule || route.value.schedule_link));
+
+onMounted(async () => {
+  await loadCatalog();
+  if (!template.value) template.value = templates.value[0]?.id ?? "";
+  if (!route.value.schedule && !route.value.schedule_link && !templates.value.length) mode.value = "own";
+});
 
 // Переключили растение - показываем его расписание.
 watch(routeId, () => load(), { immediate: true });
 
 function load() {
+  const link = route.value.schedule_link;
   const saved = route.value.schedule;
-  if (!saved) {
-    kind.value = "weekly";
-    enabled.value = true;
-    days.value = [0, 3];
-    times.value = ["08:00"];
-    dose.value = null;
-    seasonFactor.value = 1;
-    catchUpH.value = 3;
-    minGapH.value = 6;
-    startDate.value = "";
-    return;
-  }
-  enabled.value = saved.enabled;
-  dose.value = saved.dose_ml;
-  seasonFactor.value = saved.season_factor;
-  catchUpH.value = saved.catch_up_h;
-  minGapH.value = saved.min_gap_h;
-  times.value = saved.rule.times.map(short);
-  if (saved.rule.type === "weekly") {
-    kind.value = "weekly";
-    days.value = [...saved.rule.days];
-  } else {
-    kind.value = "interval";
-    everyDays.value = saved.rule.every_days;
-    startDate.value = saved.rule.start_date ?? "";
-  }
+  template.value = link?.template ?? templates.value[0]?.id ?? "";
+  enabled.value = link?.enabled ?? saved?.enabled ?? true;
+  mode.value = saved ? "own" : "template";
+  rule.value = saved
+    ? clone(saved.rule)
+    : { type: "weekly", days: [0, 3], times: ["08:00"] };
+  dose.value = saved?.dose_ml ?? null;
+  seasonFactor.value = saved?.season_factor ?? 1;
+  catchUpH.value = saved?.catch_up_h ?? 3;
+  minGapH.value = saved?.min_gap_h ?? 6;
 }
 
-// Бэкенд отдаёт "08:00:00", в поле времени нужно "08:00".
-function short(value: string): string {
-  return value.slice(0, 5);
-}
-
-function toggleDay(day: number) {
-  days.value = days.value.includes(day)
-    ? days.value.filter((d) => d !== day)
-    : [...days.value, day].sort();
-}
-
-function rule(): Rule {
-  const list = times.value.filter(Boolean);
-  return kind.value === "weekly"
-    ? { type: "weekly", days: [...days.value].sort(), times: list }
-    : {
-        type: "interval",
-        every_days: everyDays.value,
-        times: list,
-        start_date: startDate.value || null,
-      };
+function setDose(event: Event) {
+  const input = event.target as HTMLInputElement;
+  dose.value = input.value === "" ? null : input.valueAsNumber;
 }
 
 async function save() {
-  if (!times.value.filter(Boolean).length) {
+  if (mode.value === "template") {
+    if (!template.value) {
+      error.value = t("schedule.need_template");
+      return;
+    }
+    await run(() =>
+      api.linkSchedule(props.machine.id, routeId.value, { template: template.value, enabled: enabled.value }),
+    );
+    return;
+  }
+  const times = rule.value.times.filter(Boolean);
+  if (!times.length) {
     error.value = t("schedule.need_time");
     return;
   }
-  if (kind.value === "weekly" && !days.value.length) {
+  if (rule.value.type === "weekly" && !rule.value.days.length) {
     error.value = t("schedule.need_day");
     return;
   }
   const config: ScheduleConfig = {
     enabled: enabled.value,
-    rule: rule(),
+    rule: { ...rule.value, times },
     dose_ml: dose.value,
     season_factor: seasonFactor.value,
     catch_up_h: catchUpH.value,
@@ -154,60 +130,35 @@ async function run(action: () => Promise<unknown>) {
       {{ t("schedule.enabled") }}
     </label>
 
-    <FormField v-slot="{ id }" :label="t('schedule.kind')">
-      <select :id="id" v-model="kind">
-        <option value="weekly">{{ t("schedule.weekly") }}</option>
-        <option value="interval">{{ t("schedule.interval") }}</option>
-      </select>
-    </FormField>
+    <div class="modes">
+      <button type="button" :class="{ active: mode === 'template' }" @click="mode = 'template'">
+        {{ t("schedule.mode_template") }}
+      </button>
+      <button type="button" :class="{ active: mode === 'own' }" @click="mode = 'own'">
+        {{ t("schedule.mode_own") }}
+      </button>
+    </div>
 
-    <FormField v-if="kind === 'weekly'" :label="t('schedule.days')">
-      <div class="days">
-        <button
-          v-for="item in WEEKDAYS"
-          :key="item.day"
-          type="button"
-          class="day"
-          :class="{ active: days.includes(item.day) }"
-          :aria-pressed="days.includes(item.day)"
-          @click="toggleDay(item.day)"
-        >
-          {{ t(item.label) }}
-        </button>
-      </div>
-    </FormField>
-
-    <template v-else>
-      <NumField
-        v-model="everyDays"
-        :label="t('schedule.every_days')"
-        :unit="t('schedule.every_days_unit')"
-        :min="1"
-      />
-      <FormField v-slot="{ id }" :label="t('schedule.start_date')" :hint="t('schedule.start_date_desc')">
-        <input :id="id" v-model="startDate" type="date" />
+    <template v-if="mode === 'template'">
+      <FormField v-slot="{ id }" :label="t('schedule.template')">
+        <select :id="id" v-model="template">
+          <option value="" disabled>{{ templates.length ? t("picker.choose") : t("picker.empty") }}</option>
+          <option v-for="entry in templates" :key="entry.id" :value="entry.id">{{ entry.item.name }}</option>
+        </select>
       </FormField>
+      <p v-if="chosen" class="muted small">
+        {{ summary("schedule", chosen.item) }}.
+        {{
+          chosen.item.dose_ml
+            ? t("schedule.template_dose", { dose: ml(chosen.item.dose_ml) })
+            : t("schedule.plant_dose", { dose: ml(route.default_dose_ml) })
+        }}
+      </p>
+      <RouterLink class="small" to="/catalog/schedule">{{ t("schedule.manage_templates") }}</RouterLink>
     </template>
 
-    <FormField :label="t('schedule.times')" :hint="t('schedule.times_desc')">
-      <div class="times">
-        <span v-for="(_, index) in times" :key="index" class="time-row">
-          <input v-model="times[index]" type="time" />
-          <button
-            v-if="times.length > 1"
-            type="button"
-            class="icon-button"
-            :aria-label="t('queue.cancel')"
-            @click="times.splice(index, 1)"
-          >
-            <AppIcon name="trash" :size="16" />
-          </button>
-        </span>
-        <button type="button" class="ghost" @click="times.push('20:00')">
-          <AppIcon name="plus" :size="14" />{{ t("schedule.add_time") }}
-        </button>
-      </div>
-    </FormField>
+    <template v-else>
+    <RuleFields v-model="rule" />
 
     <FormField v-slot="{ id }" :label="t('schedule.dose')" :hint="t('schedule.dose_desc')">
       <span class="num">
@@ -218,7 +169,7 @@ async function run(action: () => Promise<unknown>) {
           min="1"
           :value="dose ?? ''"
           :placeholder="String(Math.round(route.default_dose_ml))"
-          @input="dose = ($event.target as HTMLInputElement).value === '' ? null : ($event.target as HTMLInputElement).valueAsNumber"
+          @input="setDose"
         />
         <span class="unit">{{ t("unit.ml") }}</span>
       </span>
@@ -244,6 +195,7 @@ async function run(action: () => Promise<unknown>) {
       :unit="t('schedule.unit_h')"
       :min="0"
     />
+    </template>
 
     <p v-if="status" class="muted small">
       <AppIcon name="clock" :size="14" />
@@ -257,7 +209,7 @@ async function run(action: () => Promise<unknown>) {
         <AppIcon name="clock" />{{ t("schedule.save") }}
       </button>
       <span class="spacer" />
-      <button v-if="route.schedule" class="danger" :disabled="busy" @click="remove">
+      <button v-if="hasSchedule" class="danger" :disabled="busy" @click="remove">
         {{ t("schedule.remove") }}
       </button>
     </div>
@@ -278,34 +230,18 @@ async function run(action: () => Promise<unknown>) {
   flex: none;
 }
 
-.days {
+.modes {
   display: flex;
-  flex-wrap: wrap;
   gap: 6px;
 }
 
-.day {
-  padding: 6px 10px;
-  border-radius: 8px;
-  font-size: 13px;
+.modes button {
+  flex: 1;
 }
 
-.day.active {
+.modes button.active {
   background: var(--accent-tank);
   border-color: var(--accent-tank);
   color: #fff;
-}
-
-.times {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.time-row {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
 }
 </style>

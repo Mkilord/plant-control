@@ -18,6 +18,7 @@ from plant_control_addon.config import (
     FlowPointConfig,
     FlowSuggestionState,
     MachineConfig,
+    MachineSetup,
     ScheduleConfig,
     ScheduleLinkConfig,
 )
@@ -124,6 +125,8 @@ class MachineStatus(BaseModel):
 class MachineOut(BaseModel):
     id: str
     config: MachineConfig
+    # Та же машина с подставленными справочниками: бак, насос, задержки клапанов.
+    setup: MachineSetup
     status: MachineStatus
 
 
@@ -239,6 +242,7 @@ def machine_out(entry: MachineEntry, control: Controller | None = None) -> Machi
     return MachineOut(
         id=entry.id,
         config=entry.config,
+        setup=entry.setup,
         status=MachineStatus(
             busy=control.is_busy(entry.id) if control else entry.is_busy,
             calibration_session=session.id if session else None,

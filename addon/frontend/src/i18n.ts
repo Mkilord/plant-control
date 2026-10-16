@@ -1,4 +1,5 @@
 import { ref, watch } from "vue";
+import { catalogEn, catalogRu } from "./i18n_catalog";
 
 // Словари. Ключи общие, en обязан содержать те же ключи, что ru (проверяет TypeScript).
 const ru = {
@@ -73,7 +74,7 @@ const ru = {
   "general.title": "Общее",
   "general.desc": "Как называется машина и как она устроена.",
   "tank.desc": "Откуда насос берёт воду. От бака зависит, сколько поливов хватит и как меняется напор.",
-  "pump.desc": "Какой сущностью в Home Assistant включается насос и сколько воды он даёт.",
+  "pump.desc": "Модель насоса из справочника и реле в Home Assistant, которым он включается.",
   "tube.desc": "Путь воды от насоса до растения. Нужен, чтобы учесть воду в трубке и высоту подъёма.",
   "collector.desc": "Общая трубка от бака до коллектора и паузы вокруг работы насоса.",
   "plants.desc": "У каждого растения свой клапан и своя трубка от коллектора.",
@@ -305,7 +306,7 @@ const ru = {
   "power.title": "Питание",
   "power.desc": "Если несколько машин питаются от одного блока, они не должны включаться разом.",
   "power.group": "Группа питания",
-  "power.group_desc": "Одинаковое название у машин от одного блока питания. Пусто - машина сама по себе.",
+  "power.group_desc": "Машины одной группы делят блок питания и включаются по её правилам.",
   "power.group_placeholder": "usb-5v",
   "power.limit": "Поливов разом",
   "power.limit_desc": "1 - строго по очереди. Больше - параллельно, если блок выдержит.",
@@ -441,7 +442,7 @@ const ru = {
   "mqtt.prefix_hint": "По нему Home Assistant ищет описания устройств. Менять, только если он изменён в интеграции MQTT.",
   "mqtt.what": "Что это даёт",
   "mqtt.what_hint": "Машины можно добавить на дашборд, поливать из автоматизаций и отмечать «Бак залит» меткой NFC.",
-  "calib.title": "Калибровка насоса",
+  "calib.title": "Калибровка машины",
   "calib.button": "Калибровка",
   "calib.setup": "Подготовка",
   "calib.plant": "Растение",
@@ -533,7 +534,7 @@ const ru = {
   "calib.suggest_less": "По уровню в баке насос дал на {pct}% меньше расчёта: {actual} вместо {expected} за {n} поливов. Поправить расход?",
   "calib.suggest_apply": "Поправить",
   "calib.suggest_dismiss": "Не надо",
-  "calib.settings_title": "Калибровка насосов",
+  "calib.settings_title": "Калибровка машин",
   "calib.settings_desc": "Напоминание о повторной калибровке и подстройка расхода по уровню в баке.",
   "calib.reminder": "Напоминать о повторной калибровке",
   "calib.reminder_weeks": "Раз в, недель",
@@ -557,6 +558,7 @@ const ru = {
   "errors.RouteNotCalibratedError": "Насос не откалиброван для этого растения",
   "errors.DoseTooSmallError": "Доза меньше того, что само дотекает после выключения",
   "errors.status": "Ошибка {status}",
+  ...catalogRu,
 };
 
 export type MessageKey = keyof typeof ru;
@@ -633,7 +635,7 @@ const en: Record<MessageKey, string> = {
   "general.title": "General",
   "general.desc": "What the machine is called and how it is built.",
   "tank.desc": "Where the pump takes water from. The tank defines how many waterings you get and how the lift changes.",
-  "pump.desc": "Which Home Assistant entity powers the pump and how much water it delivers.",
+  "pump.desc": "The pump model from the catalog and the Home Assistant relay that switches it.",
   "tube.desc": "The way from the pump to the plant. Needed to account for water in the tube and the lift height.",
   "collector.desc": "The shared tube from the tank to the collector and the pauses around the pump run.",
   "plants.desc": "Each plant has its own valve and its own tube from the collector.",
@@ -864,7 +866,7 @@ const en: Record<MessageKey, string> = {
   "power.title": "Power",
   "power.desc": "Machines on one power supply must not switch on at the same time.",
   "power.group": "Power group",
-  "power.group_desc": "The same name for machines on one supply. Empty - the machine is on its own.",
+  "power.group_desc": "Machines in one group share a power supply and start by its rules.",
   "power.group_placeholder": "usb-5v",
   "power.limit": "Waterings at once",
   "power.limit_desc": "1 - strictly one by one. More - in parallel, if the supply can take it.",
@@ -1000,7 +1002,7 @@ const en: Record<MessageKey, string> = {
   "mqtt.prefix_hint": "Home Assistant looks for device descriptions under it. Change it only if it is changed in the MQTT integration.",
   "mqtt.what": "What it gives",
   "mqtt.what_hint": "Machines can be put on a dashboard, watered from automations and marked Tank filled with an NFC tag.",
-  "calib.title": "Pump calibration",
+  "calib.title": "Machine calibration",
   "calib.button": "Calibrate",
   "calib.setup": "Setup",
   "calib.plant": "Plant",
@@ -1092,7 +1094,7 @@ const en: Record<MessageKey, string> = {
   "calib.suggest_less": "By the tank level the pump gave {pct}% less than calculated: {actual} instead of {expected} over {n} waterings. Correct the flow?",
   "calib.suggest_apply": "Correct",
   "calib.suggest_dismiss": "Dismiss",
-  "calib.settings_title": "Pump calibration",
+  "calib.settings_title": "Machine calibration",
   "calib.settings_desc": "Recalibration reminder and flow correction by the tank level.",
   "calib.reminder": "Remind to recalibrate",
   "calib.reminder_weeks": "Every, weeks",
@@ -1116,6 +1118,7 @@ const en: Record<MessageKey, string> = {
   "errors.RouteNotCalibratedError": "The pump is not calibrated for this plant",
   "errors.DoseTooSmallError": "The dose is less than what drips by itself after the stop",
   "errors.status": "Error {status}",
+  ...catalogEn,
 };
 
 export type Locale = "ru" | "en";

@@ -4,6 +4,7 @@ import { api, errorText, humanError, problemText, type Machine } from "../api";
 import { ml, time } from "../format";
 import { t } from "../i18n";
 import AppIcon from "./AppIcon.vue";
+import CopyMachineDialog from "./CopyMachineDialog.vue";
 import ScheduleDialog from "./ScheduleDialog.vue";
 import TankDialog from "./TankDialog.vue";
 import TankGauge from "./TankGauge.vue";
@@ -15,6 +16,7 @@ const emit = defineEmits<{ changed: [] }>();
 const showWater = ref(false);
 const showTank = ref(false);
 const showSchedule = ref(false);
+const showCopy = ref(false);
 const error = ref("");
 
 const status = computed(() => props.machine.status);
@@ -70,6 +72,23 @@ const pumpChip = computed(() => {
 const calibrating = computed(() => status.value.calibration_session !== null);
 const needsCalibration = computed(() => status.value.flows.some((f) => f.source === "none"));
 const calibrationDue = computed(() => status.value.flows.some((f) => f.due));
+// Насос, бак или трубки поменялись после калибровки: эти растения не поливаются.
+const staleRoutes = computed(() => status.value.flows.filter((f) => f.stale).map((f) => f.route_id));
+
+function plantName(routeId: string): string {
+  const route = props.machine.config.routes.find((r) => r.id === routeId);
+  return route?.name || routeId;
+}
+
+async function keepCalibration(routeId: string) {
+  error.value = "";
+  try {
+    await api.acceptCalibration(props.machine.id, routeId);
+  } catch (e) {
+    error.value = errorText(e);
+  }
+  emit("changed");
+}
 const suggestion = computed(() => status.value.flow_suggestion);
 const suggestionText = computed(() => {
   const s = suggestion.value;
@@ -174,6 +193,18 @@ async function stop() {
       </li>
     </ul>
 
+    <div v-if="staleRoutes.length && !calibrating" class="suggestion small">
+      <p>{{ t("calib.stale_card", { plants: staleRoutes.map(plantName).join(", ") }) }}</p>
+      <div class="row">
+        <RouterLink class="button primary" :to="`/machines/${machine.id}/calibrate?route=${staleRoutes[0]}`">
+          {{ t("calib.recalibrate") }}
+        </RouterLink>
+        <button v-for="routeId in staleRoutes" :key="routeId" @click="keepCalibration(routeId)">
+          {{ staleRoutes.length > 1 ? t("calib.keep_for", { plant: plantName(routeId) }) : t("calib.keep") }}
+        </button>
+      </div>
+    </div>
+
     <div v-if="suggestion" class="suggestion small">
       <p>{{ suggestionText }}</p>
       <div class="row">
@@ -238,6 +269,9 @@ async function stop() {
       >
         <AppIcon name="pump" />{{ t("calib.button") }}
       </RouterLink>
+      <button :title="t('copy.button_hint')" @click="showCopy = true">
+        <AppIcon name="plus" />{{ t("copy.button") }}
+      </button>
       <span class="spacer" />
       <button class="danger" :class="{ solid: status.busy }" @click="stop">
         <AppIcon name="stop" :size="16" />{{ t("card.stop") }}
@@ -254,6 +288,12 @@ async function stop() {
       v-if="showTank"
       :machine="machine"
       @close="showTank = false"
+      @changed="emit('changed')"
+    />
+    <CopyMachineDialog
+      v-if="showCopy"
+      :machine="machine"
+      @close="showCopy = false"
       @changed="emit('changed')"
     />
     <ScheduleDialog

@@ -56,6 +56,7 @@ interface Tab {
 const tabs: Tab[] = [
   { to: "/", label: "nav.machines", icon: "can", match: (p) => p === "/" || p.startsWith("/machines") },
   { to: "/waterings", label: "nav.waterings", icon: "calendar", match: (p) => p.startsWith("/waterings") },
+  { to: "/catalog", label: "nav.catalog", icon: "tank", match: (p) => p.startsWith("/catalog") },
   { to: "/problems", label: "nav.problems", icon: "alert", match: (p) => p.startsWith("/problems") },
 ];
 

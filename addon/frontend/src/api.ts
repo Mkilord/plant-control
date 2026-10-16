@@ -20,7 +20,7 @@ export interface ConnectionConfig {
 
 export type Plumbing =
   | { type: "direct"; back_to_tank_fraction: number }
-  | { type: "collector"; supply: ConnectionConfig };
+  | { type: "collector"; collector_type: string; supply: ConnectionConfig };
 
 export type Rule =
   | { type: "weekly"; days: number[]; times: string[] }
@@ -33,6 +33,11 @@ export interface ScheduleConfig {
   season_factor: number;
   catch_up_h: number;
   min_gap_h: number;
+}
+
+export interface ScheduleLink {
+  template: string;
+  enabled: boolean;
 }
 
 export interface FlowPoint {
@@ -48,6 +53,10 @@ export interface RouteCalibration {
   calibrated_at: string | null;
   spread_pct: number | null;
   record_id: number | null;
+  // На чём сделан замер. Не совпадает с текущим железом - калибровка устарела.
+  fingerprint?: string | null;
+  // Калибровка пришла с копией машины: имя исходной машины.
+  copied_from?: string | null;
 }
 
 export interface RouteConfig {
@@ -59,6 +68,8 @@ export interface RouteConfig {
   correction: number;
   default_dose_ml: number;
   schedule: ScheduleConfig | null;
+  // Расписание из справочника. Своё расписание и ссылка не бывают вместе.
+  schedule_link: ScheduleLink | null;
   // Свой замер маршрута. null - наследует расход базового маршрута.
   calibration: RouteCalibration | null;
 }
@@ -68,19 +79,24 @@ export type FlowMode = "calibrated" | "advanced";
 
 export type HeadModel = "start" | "mid" | "stepwise";
 
+// Машина как её хранят: ссылки на справочники плюс своё (трубки, растения, реле).
 export interface MachineConfig {
   name: string;
-  tank: { geometry: Geometry; reserve_ml: number };
-  pump: { entity_id: string; flow: Flow | null; max_runtime_s: number; cooldown_s: number };
+  tank_type: string;
+  pump: { model: string; entity_id: string };
   plumbing: Plumbing;
   head_model: HeadModel;
   flow_mode: FlowMode;
   base_route: string | null;
   routes: RouteConfig[];
+  power_group: string | null;
+}
+
+// Та же машина с подставленными справочниками. Только для чтения.
+export interface MachineSetup {
+  tank: { geometry: Geometry; reserve_ml: number };
+  pump: { entity_id: string; flow: Flow | null; max_runtime_s: number | null; cooldown_s: number };
   timings: { valve_lead_s: number; valve_lag_s: number };
-  power_group: string;
-  power_limit: number;
-  power_gap_s: number;
 }
 
 export interface WateringResult {
@@ -102,6 +118,9 @@ export interface RouteFlowStatus {
   afterflow_ml: number | null;
   calibrated_at: string | null;
   due: boolean;
+  // Насос, бак или трубки поменялись после замера: поливать нельзя.
+  stale: boolean;
+  copied_from: string | null;
 }
 
 export interface FlowSuggestion {
@@ -212,6 +231,8 @@ export interface NotificationTemplate {
 
 export interface ScheduleStatus {
   route_id: string;
+  // Расписание из справочника. null - своё.
+  template: string | null;
   enabled: boolean;
   dose_ml: number;
   next_run_at: string | null;
@@ -269,7 +290,79 @@ export interface Problem {
 export interface Machine {
   id: string;
   config: MachineConfig;
+  setup: MachineSetup;
   status: MachineStatus;
+}
+
+// --- Справочники ---
+
+export type CatalogKind = "tank" | "pump" | "collector" | "schedule" | "power";
+export const CATALOG_KINDS: CatalogKind[] = ["tank", "pump", "collector", "schedule", "power"];
+
+export interface TankType {
+  name: string;
+  geometry: Geometry;
+  reserve_ml: number;
+}
+
+export interface PumpModel {
+  name: string;
+  // null - предел работы выключен.
+  max_runtime_s: number | null;
+  cooldown_s: number;
+  flow: Flow | null;
+}
+
+export interface CollectorType {
+  name: string;
+  outlets: number;
+  valve_lead_s: number;
+  valve_lag_s: number;
+}
+
+export interface ScheduleTemplate {
+  name: string;
+  rule: Rule;
+  dose_ml: number | null;
+  season_factor: number;
+  catch_up_h: number;
+  min_gap_h: number;
+}
+
+export interface PowerGroup {
+  name: string;
+  max_concurrent: number;
+  min_start_gap_s: number;
+  max_wait_min: number | null;
+}
+
+export interface CatalogItems {
+  tank: TankType;
+  pump: PumpModel;
+  collector: CollectorType;
+  schedule: ScheduleTemplate;
+  power: PowerGroup;
+}
+
+export interface CatalogUser {
+  machine_id: string;
+  name: string;
+  routes: string[];
+}
+
+export interface CatalogEntry<K extends CatalogKind = CatalogKind> {
+  id: string;
+  kind: K;
+  item: CatalogItems[K];
+  users: CatalogUser[];
+}
+
+export type CatalogListing = { [K in CatalogKind]: CatalogEntry<K>[] };
+
+export interface CatalogImpact {
+  machine_id: string;
+  name: string;
+  stale_routes: string[];
 }
 
 export interface Plan {
@@ -388,13 +481,26 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
+function issuesText(issues: ValidationIssue[]): string {
+  return issues
+    .map((issue) => `${issue.loc.filter((part) => part !== "body").join(".")}: ${issue.msg}`)
+    .join("; ");
+}
+
 function toError(status: number, data: unknown): ApiError {
   if (data && typeof data === "object") {
     const record = data as Record<string, unknown>;
     // Ошибка домена: {"error": "NotEnoughWaterError", "detail": "..."}
     if (typeof record.error === "string") {
       const key = `errors.${record.error}`;
-      let text = hasMessage(key) ? t(key) : String(record.detail ?? record.error);
+      const detail = Array.isArray(record.detail)
+        ? issuesText(record.detail as ValidationIssue[])
+        : String(record.detail ?? record.error);
+      let text = hasMessage(key) ? t(key) : detail;
+      // Запись справочника занята: назвать машины.
+      if (Array.isArray(record.machines) && record.machines.length) {
+        text += ": " + (record.machines as string[]).join(", ");
+      }
       // Полив запрещён: перечислить, что именно мешает.
       if (Array.isArray(record.problems) && record.problems.length) {
         text += ": " + (record.problems as Blocker[]).map(problemText).join("; ");
@@ -403,10 +509,7 @@ function toError(status: number, data: unknown): ApiError {
     }
     // Ошибка валидации FastAPI: {"detail": [{"loc": [...], "msg": "..."}]}
     if (Array.isArray(record.detail)) {
-      const issues = (record.detail as ValidationIssue[])
-        .map((issue) => `${issue.loc.filter((part) => part !== "body").join(".")}: ${issue.msg}`)
-        .join("; ");
-      return new ApiError(issues, status, "ValidationError");
+      return new ApiError(issuesText(record.detail as ValidationIssue[]), status, "ValidationError");
     }
     if (typeof record.detail === "string") {
       return new ApiError(record.detail, status, null);
@@ -424,6 +527,29 @@ export const api = {
   updateMachine: (id: string, config: MachineConfig) =>
     request<Machine>("PUT", `api/machines/${id}`, config),
   deleteMachine: (id: string) => request<void>("DELETE", `api/machines/${id}`),
+  copyMachine: (id: string, name: string, pumpEntityId: string, valves: Record<string, string>) =>
+    request<Machine>("POST", `api/machines/${id}/copy`, {
+      name,
+      pump_entity_id: pumpEntityId,
+      valves,
+    }),
+  acceptCalibration: (id: string, routeId: string) =>
+    request<Machine>("POST", `api/machines/${id}/routes/${routeId}/calibration/accept`),
+  pulse: (entityId: string, seconds = 1) =>
+    request<void>("POST", `api/ha/entities/${entityId}/pulse`, { seconds }),
+
+  // Справочники.
+  catalog: () => request<CatalogListing>("GET", "api/catalog"),
+  catalogItem: <K extends CatalogKind>(kind: K, id: string) =>
+    request<CatalogEntry<K>>("GET", `api/catalog/${kind}/${id}`),
+  createItem: <K extends CatalogKind>(kind: K, item: CatalogItems[K]) =>
+    request<CatalogEntry<K>>("POST", `api/catalog/${kind}`, item),
+  updateItem: <K extends CatalogKind>(kind: K, id: string, item: CatalogItems[K]) =>
+    request<CatalogEntry<K>>("PUT", `api/catalog/${kind}/${id}`, item),
+  previewItem: <K extends CatalogKind>(kind: K, id: string, item: CatalogItems[K]) =>
+    request<CatalogImpact[]>("POST", `api/catalog/${kind}/${id}/preview`, item),
+  deleteItem: (kind: CatalogKind, id: string) =>
+    request<void>("DELETE", `api/catalog/${kind}/${id}`),
   plan: (id: string, routeId: string, doseMl: number) =>
     request<Plan>("POST", `api/machines/${id}/plan`, { route_id: routeId, dose_ml: doseMl }),
   water: (id: string, routeId: string, doseMl: number) =>
@@ -440,6 +566,8 @@ export const api = {
   // Расписание одного растения.
   setSchedule: (id: string, routeId: string, schedule: ScheduleConfig) =>
     request<Machine>("PUT", `api/machines/${id}/routes/${routeId}/schedule`, schedule),
+  linkSchedule: (id: string, routeId: string, link: ScheduleLink) =>
+    request<Machine>("PUT", `api/machines/${id}/routes/${routeId}/schedule-link`, link),
   clearSchedule: (id: string, routeId: string) =>
     request<Machine>("DELETE", `api/machines/${id}/routes/${routeId}/schedule`),
   listSchedules: () => request<Schedule[]>("GET", "api/schedules"),

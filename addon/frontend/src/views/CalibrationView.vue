@@ -54,7 +54,9 @@ const marks = computed(() => {
 });
 
 const durations = computed(() => parseList(durationsText.value));
-const maxRuntime = computed(() => machine.value?.config.pump.max_runtime_s ?? 0);
+// Предел прогона: предел насоса, а если он выключен - 10 минут, как на сервере.
+const UNLIMITED_PUMP_RUN_S = 600;
+const maxRuntime = computed(() => machine.value?.setup.pump.max_runtime_s ?? UNLIMITED_PUMP_RUN_S);
 const routes = computed(() => machine.value?.config.routes ?? []);
 
 function plantName(id: string): string {
@@ -125,7 +127,7 @@ onMounted(async () => {
   try {
     machine.value = await api.getMachine(props.id);
     const requested = typeof route.query.route === "string" ? route.query.route : "";
-    const firstUncalibrated = machine.value.status.flows.find((f) => f.source === "none");
+    const firstUncalibrated = machine.value.status.flows.find((f) => f.source === "none" || f.stale);
     routeId.value =
       requested || firstUncalibrated?.route_id || machine.value.config.routes[0]?.id || "";
     const open = machine.value.status.calibration_session;
