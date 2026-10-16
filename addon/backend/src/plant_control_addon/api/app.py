@@ -16,6 +16,8 @@ from plant_control.application.queue import HISTORY_LIMIT
 from plant_control.application.scheduler import SchedulerService
 from plant_control.domain.problems import ProblemBoard
 from pydantic import BaseModel
+from starlette.responses import Response
+from starlette.types import Scope
 
 from plant_control_addon.api.calibration_routes import router as calibration_router
 from plant_control_addon.api.catalog_routes import router as catalog_router
@@ -211,9 +213,27 @@ def create_app(
     # Фронт подключается последним: всё, что не /api, отдаётся как статика.
     static_dir = static_dir_from(given_settings or Settings())
     if static_dir is not None:
-        app.mount("/", StaticFiles(directory=static_dir, html=True), name="frontend")
+        app.mount("/", FrontendFiles(directory=static_dir, html=True), name="frontend")
 
     return app
+
+
+class FrontendFiles(StaticFiles):
+    """Статика интерфейса с правильным кэшированием.
+
+    index.html браузер должен проверять каждый раз: в нём ссылки на скрипты текущей
+    версии. Иначе после обновления add-on'а браузер или приложение HA показывают
+    старый интерфейс. Файлы из assets/ с хэшем в имени не меняются никогда,
+    их можно хранить сколько угодно.
+    """
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        response = await super().get_response(path, scope)
+        if path.startswith("assets/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def static_dir_from(settings: Settings) -> Path | None:

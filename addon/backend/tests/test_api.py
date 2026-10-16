@@ -49,6 +49,8 @@ async def test_frontend_is_served_when_built(gateway: FakeGateway, tmp_path: Pat
     static = tmp_path / "static"
     static.mkdir()
     (static / "index.html").write_text("<html>plant control</html>", encoding="utf-8")
+    (static / "assets").mkdir()
+    (static / "assets" / "index-abc123.js").write_text("console.log(1)", encoding="utf-8")
     os.environ["PLANT_CONTROL_STATIC_DIR"] = str(static)
     try:
         app = create_app(ha=gateway, settings=settings(), data_dir=tmp_path, mqtt=False)
@@ -56,6 +58,11 @@ async def test_frontend_is_served_when_built(gateway: FakeGateway, tmp_path: Pat
         del os.environ["PLANT_CONTROL_STATIC_DIR"]
     async with running(app) as client:
         page = await client.get("/")
+        script = await client.get("/assets/index-abc123.js")
         health = await client.get("/api/health")
     assert "plant control" in page.text
     assert health.status_code == 200
+    # Страница проверяется каждый раз, иначе после обновления виден старый интерфейс.
+    assert page.headers["cache-control"] == "no-cache"
+    assert "immutable" in script.headers["cache-control"]
+    assert "cache-control" not in health.headers
