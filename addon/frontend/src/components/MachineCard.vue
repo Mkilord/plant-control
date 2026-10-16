@@ -18,6 +18,25 @@ const showWater = ref(false);
 const showTank = ref(false);
 const showSchedule = ref(false);
 const showCopy = ref(false);
+
+// Карточка свёрнута по умолчанию: машин бывает много. Раскрытие помнится в браузере.
+const storageKey = `plant-control.card.${props.machine.id}`;
+function readExpanded(): boolean {
+  try {
+    return localStorage.getItem(storageKey) === "1";
+  } catch {
+    return false;
+  }
+}
+const expanded = ref(readExpanded());
+function toggle() {
+  expanded.value = !expanded.value;
+  try {
+    localStorage.setItem(storageKey, expanded.value ? "1" : "0");
+  } catch {
+    // Хранилище недоступно: просто не запоминаем.
+  }
+}
 const error = ref("");
 
 const status = computed(() => props.machine.status);
@@ -58,6 +77,7 @@ const blockedPlants = computed(
   () => new Set(status.value.blockers.filter((b) => b.route_scoped).map((b) => b.target)),
 );
 
+// Выключенный насос - обычное состояние, о нём не пишем.
 const pumpChip = computed(() => {
   switch (status.value.pump.state) {
     case "on":
@@ -65,9 +85,10 @@ const pumpChip = computed(() => {
     case "unknown":
       return { text: t("card.pump_unknown"), cls: "danger" };
     default:
-      return { text: t("card.pump_off"), cls: "" };
+      return null;
   }
 });
+const lastFailed = computed(() => status.value.last_watering && !status.value.last_watering.ok);
 
 // Калибровка: идёт сейчас, не хватает замера, пора повторить.
 const calibrating = computed(() => status.value.calibration_session !== null);
@@ -144,9 +165,20 @@ async function stop() {
       >
         <AppIcon name="edit" :size="19" />
       </RouterLink>
+      <button
+        type="button"
+        class="icon-button toggle"
+        :class="{ open: expanded }"
+        :title="expanded ? t('card.collapse') : t('card.expand')"
+        :aria-label="expanded ? t('card.collapse') : t('card.expand')"
+        :aria-expanded="expanded"
+        @click="toggle"
+      >
+        <AppIcon name="chevron" :size="19" />
+      </button>
     </header>
 
-    <div class="chips">
+    <div class="chips" v-if="calibrating || status.busy || needsCalibration || calibrationDue || waiting || pumpChip || machineBlockers.length || lastFailed">
       <span v-if="calibrating" class="chip on pulse">
         <AppIcon name="pump" :size="12" /> {{ t("calib.chip_running") }}
       </span>
@@ -175,8 +207,15 @@ async function stop() {
             : t("card.queued")
         }}
       </span>
-      <span class="chip" :class="pumpChip.cls">
+      <span v-if="pumpChip" class="chip" :class="pumpChip.cls">
         <AppIcon name="pump" :size="12" /> {{ pumpChip.text }}
+      </span>
+      <span
+        v-if="lastFailed && !expanded"
+        class="chip danger"
+        :title="humanError(status.last_watering?.error ?? null)"
+      >
+        <AppIcon name="alert" :size="12" /> {{ t("card.last_failed") }}
       </span>
       <RouterLink
         v-if="machineBlockers.length"
@@ -214,39 +253,50 @@ async function stop() {
       </div>
     </div>
 
-    <TankGauge :tank="status.tank" />
-
-    <ul v-if="hasCollector" class="plants">
-      <li v-for="plant in plants" :key="plant.id">
-        <AppIcon name="plant" :size="14" />
-        <span class="plant-name">{{ plant.name }}</span>
-        <span v-if="blockedPlants.has(plant.id)" class="plant-blocked" :title="t('card.blocked')">
-          <AppIcon name="alert" :size="14" />
+    <template v-if="!expanded">
+      <TankGauge :tank="status.tank" compact>
+        <span class="next muted" :title="t('card.next')">
+          <AppIcon name="clock" :size="13" />
+          {{ nextRun ? time(nextRun) : t("card.no_schedule") }}
         </span>
-        <span
-          class="dot"
-          :class="{ open: plant.valve === 'open', unknown: plant.valve === 'unknown' }"
-          :title="plant.valve"
-        />
-      </li>
-    </ul>
+      </TankGauge>
+    </template>
+    <template v-else>
+      <TankGauge :tank="status.tank" />
 
-    <p v-if="status.last_watering" class="last small">
-      <AppIcon name="clock" :size="14" />
-      <span class="muted">{{ t("card.last") }}</span>
-      {{ time(status.last_watering.started_at) }}, {{ ml(status.last_watering.dose_ml) }}
-      <span v-if="status.last_watering.ok" class="chip on">{{ t("card.ok") }}</span>
-      <span v-else class="chip danger" :title="humanError(status.last_watering.error)">
-        {{ t("card.error") }}
-      </span>
-    </p>
+      <ul v-if="hasCollector" class="plants">
+        <li v-for="plant in plants" :key="plant.id">
+          <AppIcon name="plant" :size="14" />
+          <span class="plant-name">{{ plant.name }}</span>
+          <span v-if="blockedPlants.has(plant.id)" class="plant-blocked" :title="t('card.blocked')">
+            <AppIcon name="alert" :size="14" />
+          </span>
+          <span
+            class="dot"
+            :class="{ open: plant.valve === 'open', unknown: plant.valve === 'unknown' }"
+            :title="plant.valve"
+          />
+        </li>
+      </ul>
 
-    <p class="last small">
-      <AppIcon name="clock" :size="14" />
-      <span class="muted">{{ t("card.next") }}</span>
-      <template v-if="nextRun">{{ time(nextRun) }}</template>
-      <span v-else class="muted">{{ t("card.no_schedule") }}</span>
-    </p>
+      <p v-if="status.last_watering" class="last small">
+        <AppIcon name="clock" :size="14" />
+        <span class="muted">{{ t("card.last") }}</span>
+        {{ time(status.last_watering.started_at) }}, {{ ml(status.last_watering.dose_ml) }}
+        <span v-if="status.last_watering.ok" class="chip on">{{ t("card.ok") }}</span>
+        <span v-else class="chip danger" :title="humanError(status.last_watering.error)">
+          {{ t("card.error") }}
+        </span>
+      </p>
+
+      <p class="last small">
+        <AppIcon name="clock" :size="14" />
+        <span class="muted">{{ t("card.next") }}</span>
+        <template v-if="nextRun">{{ time(nextRun) }}</template>
+        <span v-else class="muted">{{ t("card.no_schedule") }}</span>
+      </p>
+
+    </template>
 
     <div v-if="error" class="error">{{ error }}</div>
 
@@ -259,14 +309,14 @@ async function stop() {
       >
         <AppIcon name="droplet" />{{ t("card.water") }}
       </button>
-      <button :title="t('card.tank')" @click="showTank = true">
-        <AppIcon name="refill" /><span class="compact">{{ t("card.tank") }}</span>
-      </button>
-      <button :title="t('card.schedule')" @click="showSchedule = true">
-        <AppIcon name="clock" /><span class="compact">{{ t("card.schedule") }}</span>
-      </button>
       <span class="spacer" />
       <MoreMenu :label="t('card.more')">
+        <button type="button" @click="showTank = true">
+          <AppIcon name="refill" />{{ t("card.tank") }}
+        </button>
+        <button type="button" @click="showSchedule = true">
+          <AppIcon name="clock" />{{ t("card.schedule") }}
+        </button>
         <RouterLink :to="`/machines/${machine.id}/calibrate`">
           <AppIcon name="pump" />{{ t("calib.button") }}
         </RouterLink>
@@ -310,7 +360,7 @@ async function stop() {
 .machine {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   border-top: 3px solid var(--accent-plant);
   transition: box-shadow 0.2s;
 }
@@ -452,21 +502,19 @@ a.chip {
   flex: 1;
 }
 
-/* На узком телефоне у второстепенных кнопок остаются только иконки: всё в один ряд. */
-@media (max-width: 480px) {
-  .compact {
-    display: none;
-  }
+.next {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
 
-  .actions {
-    gap: 6px;
-  }
+.toggle :deep(.icon) {
+  transition: transform 0.2s;
+}
 
-  .actions > button,
-  .actions > .button {
-    padding-left: 10px;
-    padding-right: 10px;
-  }
+.toggle.open :deep(.icon) {
+  transform: rotate(180deg);
 }
 
 .suggestion {

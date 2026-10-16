@@ -4,7 +4,10 @@ import { computed } from "vue";
 import type { MachineStatus } from "../api";
 import { ml } from "../format";
 
-const props = defineProps<{ tank: MachineStatus["tank"] }>();
+// compact - тонкая полоска и только доступный объём: для свёрнутой карточки.
+const props = withDefaults(defineProps<{ tank: MachineStatus["tank"]; compact?: boolean }>(), {
+  compact: false,
+});
 
 const percent = (value: number) =>
   props.tank.capacity_ml > 0 ? Math.max(0, Math.min(100, (value / props.tank.capacity_ml) * 100)) : 0;
@@ -15,7 +18,7 @@ const low = computed(() => props.tank.usable_ml < props.tank.capacity_ml * 0.15)
 </script>
 
 <template>
-  <div class="gauge" :title="t('gauge.level', { level: Math.round(tank.level_mm) })">
+  <div class="gauge" :class="{ compact }" :title="t('gauge.level', { level: Math.round(tank.level_mm) })">
     <div class="bar">
       <div class="water" :class="{ low }" :style="{ width: waterPercent + '%' }" />
       <div class="reserve" :style="{ width: reservePercent + '%' }" />
@@ -24,7 +27,8 @@ const low = computed(() => props.tank.usable_ml < props.tank.capacity_ml * 0.15)
       <span>
         {{ t("gauge.available") }} <b>{{ ml(tank.usable_ml) }}</b>
       </span>
-      <span class="muted">{{
+      <slot />
+      <span v-if="!compact" class="muted">{{
         t("gauge.of", { capacity: ml(tank.capacity_ml), reserve: ml(tank.reserve_ml) })
       }}</span>
     </div>
@@ -44,6 +48,11 @@ const low = computed(() => props.tank.usable_ml < props.tank.capacity_ml * 0.15)
   border-radius: 7px;
   background: var(--water-soft);
   overflow: hidden;
+}
+
+.compact .bar {
+  height: 8px;
+  border-radius: 4px;
 }
 
 .water {

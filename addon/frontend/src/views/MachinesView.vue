@@ -74,6 +74,11 @@ onUnmounted(() => window.clearTimeout(timer));
 </template>
 
 <style scoped>
+/* Карточки разной высоты (свёрнутые и раскрытые) не тянут друг друга. */
+.grid {
+  align-items: start;
+}
+
 .subtitle {
   margin: 2px 0 0;
 }
