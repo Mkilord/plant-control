@@ -309,7 +309,9 @@ async function stop() {
       >
         <AppIcon name="droplet" />{{ t("card.water") }}
       </button>
-      <button @click="showTank = true"><AppIcon name="refill" />{{ t("card.tank") }}</button>
+      <button :title="t('card.tank')" @click="showTank = true">
+        <AppIcon name="refill" /><span class="tank-label">{{ t("card.tank") }}</span>
+      </button>
       <span class="spacer" />
       <MoreMenu :label="t('card.more')">
         <button type="button" @click="showSchedule = true">
@@ -356,6 +358,7 @@ async function stop() {
 
 <style scoped>
 .machine {
+  container: card / inline-size;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -486,10 +489,11 @@ a.chip {
   color: var(--muted);
 }
 
+/* Кнопки всегда в один ряд, какой бы узкой ни была карточка. */
 .actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-wrap: nowrap;
+  gap: 6px;
   align-items: center;
   margin-top: auto;
   padding-top: 12px;
@@ -507,15 +511,16 @@ a.chip {
   margin-left: auto;
 }
 
-/* Узкий телефон: кнопки плотнее, чтобы всё влезло в один ряд. */
-@media (max-width: 480px) {
-  .actions {
-    gap: 6px;
-  }
+.actions > button {
+  padding-left: 10px;
+  padding-right: 10px;
+  white-space: nowrap;
+}
 
-  .actions > button {
-    padding-left: 10px;
-    padding-right: 10px;
+/* Совсем узкая карточка: у "Бак" остаётся только иконка. */
+@container card (max-width: 300px) {
+  .tank-label {
+    display: none;
   }
 }
 
