@@ -1,5 +1,6 @@
 """Тесты уведомлений и событий Home Assistant."""
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -316,6 +317,11 @@ async def test_disabled_notifications_send_nothing(
     machine_id = (await create(api, SIMPLE))["id"]
     await api.put(f"/api/machines/{machine_id}/tank/volume", json={"volume_ml": 0})
 
+    # Уведомления о проблемах уходят в фоне: дать им дойти.
+    for _ in range(100):
+        if gateway.events:
+            break
+        await asyncio.sleep(0.01)
     assert gateway.notifications == []
     # События на шину уходят всё равно.
     assert any(name == "plant_control_problem_opened" for name, _ in gateway.events)

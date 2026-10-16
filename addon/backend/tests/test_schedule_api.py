@@ -89,32 +89,69 @@ async def test_interval_schedule_survives_restart(gateway: FakeGateway, tmp_path
         assert "09:30:00" in listed[0]["next_run_at"]
 
 
-async def test_schedule_check_waters_when_the_time_has_come(
-    api: httpx.AsyncClient, gateway: FakeGateway
-) -> None:
-    machine_id = (await create(api, SIMPLE))["id"]
-    await api.post(f"/api/machines/{machine_id}/tank/refill", json={})
-    now = datetime.now(UTC)
-    # Срок - минуту назад, чтобы проверка сработала прямо сейчас.
-    rule = {
+def every_day_at(moment: datetime, dose: float = 60) -> dict[str, Any]:
+    return {
         "enabled": True,
         "rule": {
             "type": "weekly",
             "days": [0, 1, 2, 3, 4, 5, 6],
-            "times": [(now - timedelta(minutes=1)).strftime("%H:%M")],
+            "times": [moment.strftime("%H:%M")],
         },
-        "dose_ml": 60,
+        "dose_ml": dose,
     }
-    await api.put(f"/api/machines/{machine_id}/routes/main/schedule", json=rule)
 
-    response = await api.post("/api/schedules/check")
 
-    assert response.status_code == 200
-    assert [item["source"] for item in response.json()["submitted"]] == ["schedule"]
-    body = await wait_idle(api, machine_id)
-    assert body["status"]["last_watering"]["dose_ml"] == 60
-    # Повторная проверка того же срока ничего не добавляет.
-    assert (await api.post("/api/schedules/check")).json()["submitted"] == []
+async def test_new_schedule_ignores_times_already_past(
+    gateway: FakeGateway, tmp_path: Path
+) -> None:
+    """Расписание, назначенное после своего срока, не пишет пропуск "поздно" и не поливает."""
+    app = create_app(ha=gateway, settings=settings(), data_dir=tmp_path, mqtt=False)
+    async with running(app) as api:
+        machine_id = (await create(api, SIMPLE))["id"]
+        now = datetime.now(UTC)
+        # Сегодняшний срок прошёл 4 часа назад: больше окна опоздания в 3 часа.
+        await api.put(
+            f"/api/machines/{machine_id}/routes/main/schedule",
+            json=every_day_at(now - timedelta(hours=4)),
+        )
+        report = (await api.post("/api/schedules/check")).json()
+        assert report == {"submitted": [], "skipped": []}
+
+        # Срок минуту назад тоже не поливается: расписание назначено позже него.
+        await api.put(
+            f"/api/machines/{machine_id}/routes/main/schedule",
+            json=every_day_at(now - timedelta(minutes=1)),
+        )
+        report = (await api.post("/api/schedules/check")).json()
+        assert report == {"submitted": [], "skipped": []}
+        journal = (await api.get("/api/queue")).json()["history"]
+        assert journal == []
+
+
+async def test_schedule_check_waters_when_the_time_has_come(
+    gateway: FakeGateway, tmp_path: Path
+) -> None:
+    app = create_app(ha=gateway, settings=settings(), data_dir=tmp_path, mqtt=False)
+    async with running(app) as api:
+        machine_id = (await create(api, SIMPLE))["id"]
+        await api.post(f"/api/machines/{machine_id}/tank/refill", json={})
+        now = datetime.now(UTC)
+        await api.put(
+            f"/api/machines/{machine_id}/routes/main/schedule",
+            json=every_day_at(now - timedelta(minutes=1)),
+        )
+        # Расписание назначено час назад: срок минуту назад уже его.
+        schedule = app.state.registry.entry(machine_id).schedules["main"]
+        schedule._last_run_at = now - timedelta(hours=1)
+
+        response = await api.post("/api/schedules/check")
+
+        assert response.status_code == 200
+        assert [item["source"] for item in response.json()["submitted"]] == ["schedule"]
+        body = await wait_idle(api, machine_id)
+        assert body["status"]["last_watering"]["dose_ml"] == 60
+        # Повторная проверка того же срока ничего не добавляет.
+        assert (await api.post("/api/schedules/check")).json()["submitted"] == []
 
 
 # --- Очередь ---
@@ -268,3 +305,23 @@ async def test_journal_survives_restart(tmp_path: Path) -> None:
         assert [(item["state"], item["dose_ml"]) for item in history] == [("done", 50)]
         assert history[0]["machine_name"] == "Фикус"
         assert history[0]["plant_name"] == "main"
+
+
+async def test_changed_shared_schedule_starts_counting_again(api: httpx.AsyncClient) -> None:
+    """Перенос времени в общем расписании не поливает сразу и не пишет пропуск."""
+    machine_id = (await create(api, SIMPLE))["id"]
+    now = datetime.now(UTC)
+    later = every_day_at(now + timedelta(hours=2))
+    template = (
+        await api.post("/api/catalog/schedule", json={"name": "Утро", "rule": later["rule"]})
+    ).json()["id"]
+    await api.put(
+        f"/api/machines/{machine_id}/routes/main/schedule-link", json={"template": template}
+    )
+    earlier = every_day_at(now - timedelta(minutes=1))
+    await api.put(
+        f"/api/catalog/schedule/{template}", json={"name": "Утро", "rule": earlier["rule"]}
+    )
+
+    report = (await api.post("/api/schedules/check")).json()
+    assert report == {"submitted": [], "skipped": []}

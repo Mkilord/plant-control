@@ -30,6 +30,7 @@ from plant_control_addon.api.notification_routes import router as notifications_
 from plant_control_addon.api.problems import router as problems_router
 from plant_control_addon.api.queue_routes import router as queue_router
 from plant_control_addon.api.queue_routes import schedules_router
+from plant_control_addon.api.transfer_routes import router as transfer_router
 from plant_control_addon.calibration import CalibrationManager, Hooks
 from plant_control_addon.controller import Controller, SystemClock
 from plant_control_addon.ha.client import HomeAssistantClient
@@ -197,6 +198,7 @@ def create_app(
     app.include_router(problems_router)
     app.include_router(queue_router)
     app.include_router(schedules_router)
+    app.include_router(transfer_router)
 
     @app.get("/api/health", tags=["service"])
     async def health() -> Health:

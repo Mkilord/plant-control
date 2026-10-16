@@ -370,7 +370,10 @@ class Controller:
             )
         for problem in report.closed:
             log.info("problem closed: %s %s", problem.machine_id, problem.kind)
-        await self._notify_problems(report)
+        # Пуши уходят в фоне: проверка стоит перед каждым поливом и прогоном калибровки,
+        # и ждать ответа телефона там незачем.
+        if report.opened or report.closed:
+            self._spawn(self._notify_problems_safely(report))
         return report
 
     async def recheck(self) -> None:
@@ -379,6 +382,12 @@ class Controller:
             await self.check_health()
         except Exception:
             log.exception("health check failed")
+
+    async def _notify_problems_safely(self, report: HealthReport) -> None:
+        try:
+            await self._notify_problems(report)
+        except Exception:
+            log.exception("cannot send problem notifications")
 
     async def _notify_problems(self, report: HealthReport) -> None:
         if self._notifications is None:

@@ -7,7 +7,7 @@
 
 import hashlib
 import json
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from plant_control.domain.power import PowerGroup, solo_group
 from plant_control.domain.schedule import Schedule
@@ -199,10 +199,19 @@ def schedules_of(
     state: MachineState,
     catalog: Catalog,
     timezone: str,
+    now: datetime | None = None,
 ) -> dict[str, Schedule]:
+    """Расписания растений машины.
+
+    Расписание без отметки отработанного срока (новое или только что изменённое)
+    отсчитывается от now: сроки до этого момента не поливаются и не считаются
+    пропущенными. Иначе новое расписание сразу записало бы вчерашний срок как
+    "поздно", а перенос времени мог бы тут же запустить полив.
+    """
+    baseline = now or datetime.now(UTC)
     schedules = {}
     for route in config.routes:
-        last = state.schedule_runs.get(route.id)
+        last = state.schedule_runs.get(route.id, baseline)
         schedule = schedule_of(machine_id, route, catalog, timezone, last)
         if schedule is not None:
             schedules[route.id] = schedule
@@ -217,6 +226,17 @@ def power_group_of(machine_id: str, config: MachineConfig | None, catalog: Catal
     if not isinstance(item, PowerGroupConfig):
         return solo_group(machine_id)
     return item.group(config.power_group)
+
+
+def schedule_key(route: RouteConfig, catalog: Catalog) -> str:
+    """Чем определяется расписание растения: меняется - отсчёт начинается заново."""
+    if route.schedule is not None:
+        return route.schedule.model_dump_json()
+    if route.schedule_link is not None:
+        template = catalog.items("schedule").get(route.schedule_link.template)
+        rule = template.model_dump_json() if template is not None else ""
+        return f"{route.schedule_link.model_dump_json()}|{rule}"
+    return ""
 
 
 # --- Кто чем пользуется ---

@@ -30,6 +30,7 @@ from plant_control_addon.assembly import (
     accept_calibration,
     power_group_of,
     resolve,
+    schedule_key,
     schedules_of,
     stale_routes,
     uses,
@@ -58,6 +59,16 @@ from plant_control_addon.config import (
 )
 from plant_control_addon.migration import is_legacy, migrate
 from plant_control_addon.storage import MachineStore
+from plant_control_addon.transfer import (
+    ExportBundle,
+    ImportPlan,
+    ImportPlanItem,
+    build_export,
+    check_references,
+    match_items,
+    referenced,
+    remap,
+)
 
 log = logging.getLogger(__name__)
 
@@ -272,6 +283,14 @@ class MachineRegistry:
         if type(config.plumbing) is not type(old.config.plumbing):
             state.supply_is_filled = False
         state.schedule_runs = _schedule_runs(old)
+        # Расписание растения изменилось - отсчёт с этого момента.
+        for route in config.routes:
+            try:
+                before = schedule_key(old.config.route(route.id), self.catalog)
+            except KeyError:
+                before = None
+            if before != schedule_key(route, self.catalog):
+                state.schedule_runs.pop(route.id, None)
         entry = self._build(machine_id, config=config, state=state, old=old)
         self._entries[machine_id] = entry
         await self._store.upsert(machine_id, config, self.state_for(machine_id))
@@ -329,8 +348,10 @@ class MachineRegistry:
         entry.config = config
         entry.setup = resolve(config, self.catalog)
         state = self.state_for(machine_id)
+        # Новое расписание отсчитывается с этого момента, прошлые сроки не трогаем.
+        state.schedule_runs.pop(route_id, None)
         entry.schedules = schedules_of(machine_id, config, state, self.catalog, self._timezone)
-        await self._store.upsert(machine_id, config, state)
+        await self._store.upsert(machine_id, config, self.state_for(machine_id))
         return entry
 
     async def accept_calibration(self, machine_id: str, route_id: str) -> MachineEntry:
@@ -387,6 +408,67 @@ class MachineRegistry:
                     f"{', '.join(sorted(taken))} already used by machine {entry.config.name!r}"
                 )
 
+    # --- Экспорт и импорт ---
+
+    def export(self, machine_ids: list[str] | None = None) -> ExportBundle:
+        """Машины (все или выбранные) вместе с их оборудованием и расписаниями."""
+        entries = (
+            [self.entry(machine_id) for machine_id in machine_ids]
+            if machine_ids
+            else self.entries()
+        )
+        return build_export(
+            [(entry.id, entry.config, entry.stale_routes) for entry in entries], self.catalog
+        )
+
+    def plan_import(self, bundle: ExportBundle) -> ImportPlan:
+        """Что произойдёт при импорте. Ничего не меняет."""
+        check_references(bundle)
+        owners = {
+            entity: entry.config.name
+            for entry in self._entries.values()
+            for entity in entry.config.entities()
+        }
+        found, missing = match_items(bundle, self.catalog)
+        return ImportPlan(
+            machines=[
+                ImportPlanItem(
+                    id=machine.id,
+                    name=machine.config.name,
+                    plants=len(machine.config.routes),
+                    taken={
+                        entity: owners[entity]
+                        for entity in machine.config.entities()
+                        if entity in owners
+                    },
+                )
+                for machine in bundle.machines
+            ],
+            new_items=len(missing),
+            reused_items=len(found),
+        )
+
+    async def import_bundle(
+        self, bundle: ExportBundle, machine_ids: list[str] | None = None
+    ) -> list[MachineEntry]:
+        """Импортировать машины (все или выбранные из файла). Реле должны быть свободны."""
+        plan = self.plan_import(bundle)
+        chosen = [m for m in bundle.machines if machine_ids is None or m.id in set(machine_ids)]
+        blocked = [
+            item.name for item in plan.machines if item.taken and item.id in {m.id for m in chosen}
+        ]
+        if blocked:
+            raise EntityInUseError(f"relays already used, cannot import: {', '.join(blocked)}")
+        needed = {ref for machine in chosen for ref in referenced(machine.config)}
+        ids, missing = match_items(bundle, self.catalog)
+        for kind, file_id, item in missing:
+            if (kind, file_id) in needed:
+                ids[(kind, file_id)] = await self.create_item(kind, item)
+        created: list[MachineEntry] = []
+        for machine in chosen:
+            created.append(await self.create(remap(machine.config, ids)))
+        return created
+
     # --- Справочники ---
 
     def users(self, kind: CatalogKind, item_id: str) -> list[MachineEntry]:
@@ -421,6 +503,12 @@ class MachineRegistry:
         try:
             for entry in affected:
                 state = self.state_for(entry.id)
+                if kind == "schedule":
+                    # Правило поменялось: отсчёт сроков у привязанных растений заново.
+                    for route in entry.config.routes:
+                        link = route.schedule_link
+                        if link is not None and link.template == item_id:
+                            state.schedule_runs.pop(route.id, None)
                 rebuilt.append(self._build(entry.id, config=entry.config, state=state, old=entry))
         except Exception:
             self.catalog.put(kind, item_id, previous)
@@ -428,6 +516,7 @@ class MachineRegistry:
         await self._store.save_catalog_item(kind, item_id, item.model_dump_json())
         for entry in rebuilt:
             self._entries[entry.id] = entry
+            await self._store.save_state(entry.id, self.state_for(entry.id))
         return rebuilt
 
     def preview_item(

@@ -564,7 +564,9 @@ class CalibrationManager:
             if session.state is not SessionState.READY:
                 raise CalibrationSessionError("previous run is not finished")
             entry = self._registry.entry(session.machine_id)
+            started = self._monotonic()
             await self._hooks.ensure_can_water(session.machine_id, session.route_id)
+            checked = self._monotonic()
             pump = entry.machine.pump
             now = self._hooks.now()
             limit = timedelta(seconds=run_limit_s(entry))
@@ -597,7 +599,15 @@ class CalibrationManager:
                     assert entry.machine.collector is not None
                     await actuation.open_valve(entry.machine.collector, valve_id)
                     await self._hooks.sleep(entry.setup.timings.valve_lead_s)
+                valve_done = self._monotonic()
                 await actuation.start_pump(pump)
+                log.info(
+                    "calibration %s run start: checks %.2f s, valve %.2f s, pump relay %.2f s",
+                    session.id,
+                    checked - started,
+                    valve_done - checked,
+                    self._monotonic() - valve_done,
+                )
             except Exception:
                 await self._shut_down(entry, session.route_id)
                 await self._registry.save(entry.machine)
