@@ -288,3 +288,15 @@ def test_history_from_last_run_is_kept_newest_first() -> None:
     queue = WateringQueue(Rig().queue._runner, FakeClock(T0), history=[old, new])
 
     assert [r.id for r in queue.history()] == ["b", "a"]
+
+
+def test_forget_removes_finished_requests_from_history() -> None:
+    rig = Rig()
+    first = rig.queue.record_skipped("m-1", "main", 100, "recently_watered")
+    second = rig.queue.record_skipped("m-1", "main", 100, "recently_watered")
+    waiting = rig.queue.submit("m-1", "main", 100)
+
+    assert rig.queue.forget([first.id, waiting.id, "unknown"]) == 1
+
+    assert rig.queue.history() == [second]
+    assert rig.queue.queued() == [waiting]

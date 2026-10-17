@@ -13,6 +13,7 @@ sqlite3 из стандартной библиотеки синхронный, �
 
 import asyncio
 import sqlite3
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -69,6 +70,23 @@ CREATE TABLE IF NOT EXISTS calibrations (
 )
 """
 
+PROBLEM_LOG_SCHEMA = """
+CREATE TABLE IF NOT EXISTS problem_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    machine_id TEXT NOT NULL,
+    machine_name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    target TEXT NOT NULL,
+    details TEXT NOT NULL,
+    blocking INTEGER NOT NULL,
+    opened_at TEXT NOT NULL,
+    closed_at TEXT
+)
+"""
+
+# Сколько записей журнала проблем хранить. Старше - удаляются.
+PROBLEM_LOG_KEEP = 500
+
 CATALOG_SCHEMA = """
 CREATE TABLE IF NOT EXISTS catalog (
     kind TEXT NOT NULL,
@@ -96,6 +114,30 @@ class StoredCalibration:
     method: str
     created_at: datetime
     data_json: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProblemLogRecord:
+    id: int
+    machine_id: str
+    machine_name: str
+    kind: str
+    target: str
+    details: str
+    blocking: bool
+    opened_at: datetime
+    closed_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class NewProblemLog:
+    machine_id: str
+    machine_name: str
+    kind: str
+    target: str
+    details: str
+    blocking: bool
+    opened_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +187,41 @@ class MachineStore:
         """Калибровки машины, сначала новые."""
         return await asyncio.to_thread(self._load_calibrations, machine_id, limit)
 
+    async def delete_waterings(self, ids: Collection[str]) -> int:
+        """Удалить записи журнала поливов. Идущие и ждущие заявки не трогаются."""
+        return await asyncio.to_thread(self._delete_waterings, list(ids))
+
+    async def watering_times(self) -> list[tuple[str, str, datetime]]:
+        """Все законченные записи журнала: id, состояние, время."""
+        return await asyncio.to_thread(self._watering_times)
+
+    async def delete_calibrations(self, ids: Collection[int]) -> int:
+        return await asyncio.to_thread(self._delete_calibrations, list(ids))
+
+    async def calibration_times(self, machine_id: str | None) -> list[tuple[int, datetime]]:
+        """id и время калибровок машины (или всех машин)."""
+        return await asyncio.to_thread(self._calibration_times, machine_id)
+
+    async def open_problem_log(self, records: Collection[NewProblemLog]) -> None:
+        await asyncio.to_thread(self._open_problem_log, list(records))
+
+    async def close_problem_log(
+        self, keys: Collection[tuple[str, str, str]], closed_at: datetime
+    ) -> None:
+        """Отметить конец открытых записей по ключу (машина, вид, цель)."""
+        await asyncio.to_thread(self._close_problem_log, list(keys), closed_at)
+
+    async def close_all_problem_log(self, closed_at: datetime) -> None:
+        """Перезапуск: что было открыто, закрывается. Живые проблемы откроются заново."""
+        await asyncio.to_thread(self._close_problem_log, None, closed_at)
+
+    async def load_problem_log(self, limit: int) -> list[ProblemLogRecord]:
+        """Журнал проблем, сначала новые."""
+        return await asyncio.to_thread(self._load_problem_log, limit)
+
+    async def delete_problem_log(self, ids: Collection[int]) -> int:
+        return await asyncio.to_thread(self._delete_problem_log, list(ids))
+
     async def load_catalog(self) -> list[StoredCatalogItem]:
         return await asyncio.to_thread(self._load_catalog)
 
@@ -181,6 +258,7 @@ class MachineStore:
             db.execute(WATERINGS_SCHEMA)
             db.execute(CALIBRATIONS_SCHEMA)
             db.execute(CATALOG_SCHEMA)
+            db.execute(PROBLEM_LOG_SCHEMA)
 
     def _load_all(self) -> list[StoredMachine]:
         with self._connect() as db:
@@ -241,6 +319,133 @@ class MachineStore:
             )
             for row in rows
         ]
+
+    def _delete_waterings(self, ids: list[str]) -> int:
+        with self._connect() as db:
+            deleted = 0
+            for chunk in _chunks(ids):
+                marks = ",".join("?" * len(chunk))
+                cursor = db.execute(
+                    f"DELETE FROM waterings WHERE id IN ({marks})"  # noqa: S608
+                    " AND state NOT IN ('queued', 'running')",
+                    chunk,
+                )
+                deleted += cursor.rowcount
+            return deleted
+
+    def _watering_times(self) -> list[tuple[str, str, datetime]]:
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT id, state, COALESCE(finished_at, requested_at) FROM waterings
+                WHERE state NOT IN ('queued', 'running')
+                """
+            ).fetchall()
+        return [(row[0], row[1], datetime.fromisoformat(row[2])) for row in rows]
+
+    def _delete_calibrations(self, ids: list[int]) -> int:
+        with self._connect() as db:
+            deleted = 0
+            for chunk in _chunks(ids):
+                marks = ",".join("?" * len(chunk))
+                cursor = db.execute(
+                    f"DELETE FROM calibrations WHERE id IN ({marks})",  # noqa: S608
+                    chunk,
+                )
+                deleted += cursor.rowcount
+            return deleted
+
+    def _calibration_times(self, machine_id: str | None) -> list[tuple[int, datetime]]:
+        with self._connect() as db:
+            if machine_id is None:
+                rows = db.execute("SELECT id, created_at FROM calibrations").fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT id, created_at FROM calibrations WHERE machine_id = ?", (machine_id,)
+                ).fetchall()
+        return [(row[0], datetime.fromisoformat(row[1])) for row in rows]
+
+    def _open_problem_log(self, records: list[NewProblemLog]) -> None:
+        with self._connect() as db:
+            db.executemany(
+                """
+                INSERT INTO problem_log (machine_id, machine_name, kind, target, details,
+                    blocking, opened_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        r.machine_id,
+                        r.machine_name,
+                        r.kind,
+                        r.target,
+                        r.details,
+                        int(r.blocking),
+                        r.opened_at.isoformat(),
+                    )
+                    for r in records
+                ],
+            )
+            db.execute(
+                "DELETE FROM problem_log WHERE id NOT IN "
+                "(SELECT id FROM problem_log ORDER BY id DESC LIMIT ?)",
+                (PROBLEM_LOG_KEEP,),
+            )
+
+    def _close_problem_log(
+        self, keys: list[tuple[str, str, str]] | None, closed_at: datetime
+    ) -> None:
+        with self._connect() as db:
+            if keys is None:
+                db.execute(
+                    "UPDATE problem_log SET closed_at = ? WHERE closed_at IS NULL",
+                    (closed_at.isoformat(),),
+                )
+                return
+            db.executemany(
+                """
+                UPDATE problem_log SET closed_at = ?
+                WHERE closed_at IS NULL AND machine_id = ? AND kind = ? AND target = ?
+                """,
+                [(closed_at.isoformat(), *key) for key in keys],
+            )
+
+    def _load_problem_log(self, limit: int) -> list[ProblemLogRecord]:
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT id, machine_id, machine_name, kind, target, details, blocking,
+                    opened_at, closed_at
+                FROM problem_log ORDER BY id DESC LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [
+            ProblemLogRecord(
+                id=row[0],
+                machine_id=row[1],
+                machine_name=row[2],
+                kind=row[3],
+                target=row[4],
+                details=row[5],
+                blocking=bool(row[6]),
+                opened_at=datetime.fromisoformat(row[7]),
+                closed_at=_parse(row[8]),
+            )
+            for row in rows
+        ]
+
+    def _delete_problem_log(self, ids: list[int]) -> int:
+        with self._connect() as db:
+            deleted = 0
+            for chunk in _chunks(ids):
+                marks = ",".join("?" * len(chunk))
+                cursor = db.execute(
+                    f"DELETE FROM problem_log WHERE id IN ({marks})",  # noqa: S608
+                    chunk,
+                )
+                deleted += cursor.rowcount
+            return deleted
 
     def _load_catalog(self) -> list[StoredCatalogItem]:
         with self._connect() as db:
@@ -364,3 +569,8 @@ def _iso(value: datetime | None) -> str | None:
 
 def _parse(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value else None
+
+
+def _chunks[T](items: list[T], size: int = 500) -> list[list[T]]:
+    """Части списка: у SQLite есть предел числа параметров в запросе."""
+    return [items[i : i + size] for i in range(0, len(items), size)]

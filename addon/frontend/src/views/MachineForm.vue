@@ -20,6 +20,7 @@ import { t, type MessageKey } from "../i18n";
 import AppIcon from "../components/AppIcon.vue";
 import CatalogEditDialog from "../components/CatalogEditDialog.vue";
 import CatalogPicker from "../components/CatalogPicker.vue";
+import EntitySelect from "../components/EntitySelect.vue";
 import FormField from "../components/FormField.vue";
 import FormSection from "../components/FormSection.vue";
 import NumField from "../components/NumField.vue";
@@ -276,8 +277,6 @@ function entityTakenBy(entityId: string | null): string {
   return entityId ? (takenEntities.value.get(entityId) ?? "") : "";
 }
 
-const freeEntities = computed(() => entities.value.filter((e) => !takenEntities.value.has(e.entity_id)));
-
 async function pulse(entityId: string | null) {
   if (!entityId) return;
   pulseError.value = "";
@@ -411,10 +410,6 @@ function onSavedAsNew(id: string) {
     </section>
 
     <form v-else @submit.prevent="save">
-      <datalist id="ha-entities">
-        <option v-for="e in freeEntities" :key="e.entity_id" :value="e.entity_id">{{ e.name }}</option>
-      </datalist>
-
       <!-- Шаги мастера -->
       <ol v-if="isNew" class="wizard-steps small">
         <li
@@ -496,13 +491,14 @@ function onSavedAsNew(id: string) {
             </FormField>
             <FormField v-slot="{ id }" :label="t('plants.valve')">
               <span class="with-button">
-                <input
+                <EntitySelect
                   :id="id"
-                  :value="route.valve_entity_id ?? ''"
-                  list="ha-entities"
+                  :model-value="route.valve_entity_id ?? ''"
+                  :entities="entities"
+                  :taken="takenEntities"
                   required
                   placeholder="switch.valve_1"
-                  @input="route.valve_entity_id = ($event.target as HTMLInputElement).value || null"
+                  @update:model-value="route.valve_entity_id = $event || null"
                 />
                 <button
                   type="button"
@@ -563,7 +559,14 @@ function onSavedAsNew(id: string) {
         <div class="fields sub">
           <FormField v-slot="{ id }" :label="t('pump.entity')" :hint="t('pump.entity_hint')">
             <span class="with-button">
-              <input :id="id" v-model="config.pump.entity_id" list="ha-entities" required placeholder="switch.pump_1" />
+              <EntitySelect
+                :id="id"
+                v-model="config.pump.entity_id"
+                :entities="entities"
+                :taken="takenEntities"
+                required
+                placeholder="switch.pump_1"
+              />
               <button
                 type="button"
                 :disabled="!config.pump.entity_id || pulsing !== ''"
@@ -865,10 +868,12 @@ function onSavedAsNew(id: string) {
 .with-button {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-start;
   gap: 6px;
 }
 
-.with-button input {
+.with-button input,
+.with-button .entity-select {
   flex: 1 1 180px;
   min-width: 0;
 }

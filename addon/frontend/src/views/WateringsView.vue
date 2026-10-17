@@ -12,6 +12,7 @@ import {
   type Schedule,
 } from "../api";
 import AppIcon, { type IconName } from "../components/AppIcon.vue";
+import ClearJournalMenu from "../components/ClearJournalMenu.vue";
 import SharedSchedules from "../components/SharedSchedules.vue";
 import { byDay, clock, ml, span, untilText } from "../format";
 import { t } from "../i18n";
@@ -112,6 +113,38 @@ const journal = computed(() =>
 const journalDays = computed(() =>
   byDay(journal.value.slice(0, shown.value), (item) => item.finished_at ?? item.requested_at),
 );
+// --- Очистка журнала: учитывает фильтр ---
+
+function finishedAt(item: QueueItem): number {
+  return new Date(item.finished_at ?? item.requested_at).getTime();
+}
+
+function clearable(days: number | null): QueueItem[] {
+  const cutoff = days === null ? Infinity : Date.now() - days * 86_400_000;
+  return journal.value.filter((item) => finishedAt(item) < cutoff);
+}
+
+async function clearJournal(days: number | null): Promise<number> {
+  const { deleted } = await api.clearWaterings({ scope: filter.value, older_than_days: days });
+  return deleted;
+}
+
+const cleared = ref("");
+
+async function afterClear(deleted: number) {
+  cleared.value = t("journal.deleted", { count: deleted });
+  await refresh();
+}
+
+async function removeItem(item: QueueItem) {
+  try {
+    await api.clearWaterings({ ids: [item.id] });
+    queue.value.history = queue.value.history.filter((h) => h.id !== item.id);
+  } catch (e) {
+    error.value = errorText(e);
+  }
+}
+
 const problemCount = computed(
   () => queue.value.history.filter((item) => !["done", "cancelled"].includes(item.state)).length,
 );
@@ -219,6 +252,12 @@ function duration(item: QueueItem): string {
           <h2 class="section-title">
             <AppIcon name="history" :size="18" />{{ t("waterings.journal") }}
           </h2>
+          <ClearJournalMenu
+            :what="filter === 'all' ? t('journal.what_waterings') : t('journal.what_waterings_problems')"
+            :count="(days) => clearable(days).length"
+            :clear="clearJournal"
+            @done="afterClear"
+          />
           <span class="spacer" />
           <div class="segmented" role="group">
             <button :class="{ active: filter === 'all' }" @click="filter = 'all'">
@@ -230,6 +269,7 @@ function duration(item: QueueItem): string {
             </button>
           </div>
         </div>
+        <p v-if="cleared" class="muted small quiet">{{ cleared }}</p>
 
         <p v-if="loaded && !journal.length" class="muted small quiet">
           {{ filter === "all" ? t("waterings.no_journal") : t("waterings.no_journal_problems") }}
@@ -258,6 +298,15 @@ function duration(item: QueueItem): string {
                   {{ humanError(item.error) }}
                 </div>
               </div>
+              <button
+                type="button"
+                class="icon-button remove"
+                :title="t('journal.remove_one')"
+                :aria-label="t('journal.remove_one')"
+                @click="removeItem(item)"
+              >
+                <AppIcon name="trash" :size="15" />
+              </button>
             </li>
           </ul>
         </div>
@@ -271,6 +320,18 @@ function duration(item: QueueItem): string {
 </template>
 
 <style scoped>
+.remove {
+  align-self: center;
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.remove:hover,
+.remove:focus-visible {
+  color: var(--danger);
+  opacity: 1;
+}
+
 .subtitle {
   margin: 2px 0 0;
 }

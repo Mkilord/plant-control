@@ -37,6 +37,11 @@ tubes, power, schedule. Each step lets you pick an existing equipment item or
 enter a new one. Tanks have a measuring wizard that explains how to measure by
 dimensions or by filling and how to find the reserve below the pump.
 
+Pump and valve relays are picked from the list of Home Assistant entities. The
+list can be searched by name and id and shows the relay state and the relays
+already taken by other machines. If an entity is not in Home Assistant yet, type
+its id by hand.
+
 The **Test** button switches a pump or valve relay on for one second.
 
 ### Copying a machine
@@ -169,6 +174,26 @@ starts and, optionally, how long a request may wait for a slot.
 - The gear on the right: notifications, MQTT and calibration.
 
 The **Water** dialog fills in the plant's dose from its schedule.
+
+On a phone, hints behind the "i" icon and selection lists open as a panel at the
+bottom. Tap outside it or press Back to close it.
+
+## Journals
+
+- **Watering journal** on the **Waterings** tab: all waterings, errors and
+  skipped scheduled waterings.
+- **Past calibrations** in the machine's calibration wizard.
+- **Problem history** on the **Problems** tab: when a problem opened, how long it
+  lasted and on which machine.
+
+Each journal is cleared from the **...** menu next to its title: records older
+than 7, 30 or 90 days, or everything. The trash icon deletes one record. In the
+watering journal clearing follows the filter: with **Failures and skips**
+selected only those are deleted. The calibration in effect and open problems
+are never deleted. Deleted records cannot be restored.
+
+Under the gear, the **Journals** section sets how long records are kept: 30, 90
+or 365 days or no limit. Older records are deleted automatically.
 
 ## Add-on options
 

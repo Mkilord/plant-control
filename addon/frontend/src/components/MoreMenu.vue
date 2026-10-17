@@ -1,30 +1,70 @@
 <script setup lang="ts">
 // Кнопка "ещё": редкие действия прячутся в выпадающий список.
 // Закрывается по клику вне меню, по Escape и после выбора пункта.
-import { onBeforeUnmount, ref, watch } from "vue";
+// Меню рисуется поверх страницы и всегда целиком в пределах экрана.
+import { nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { claimPopup, releasePopup } from "../narrow";
 import AppIcon from "./AppIcon.vue";
 
 // down - меню раскрывается вниз (кнопка вверху страницы), иначе вверх (низ карточки).
-withDefaults(defineProps<{ label: string; down?: boolean }>(), { down: false });
+// Если в эту сторону места нет, меню откроется в другую.
+const props = withDefaults(defineProps<{ label: string; down?: boolean }>(), { down: false });
 
+const MARGIN = 8;
+const GAP = 6;
 const open = ref(false);
 const root = ref<HTMLElement | null>(null);
+const menu = ref<HTMLElement | null>(null);
+const style = ref<Record<string, string>>({ visibility: "hidden" });
+
+function close() {
+  open.value = false;
+}
 
 function onDocument(event: Event) {
-  if (root.value && !root.value.contains(event.target as Node)) open.value = false;
+  const target = event.target as Node;
+  if (root.value?.contains(target) || menu.value?.contains(target)) return;
+  open.value = false;
 }
 
 function onKey(event: KeyboardEvent) {
   if (event.key === "Escape") open.value = false;
 }
 
-watch(open, (value) => {
+function place() {
+  const anchor = root.value?.getBoundingClientRect();
+  const el = menu.value;
+  if (!anchor || !el) return;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const width = el.offsetWidth;
+  const height = el.offsetHeight;
+  // Правый край меню у правого края кнопки, но не за пределами экрана.
+  const left = Math.max(MARGIN, Math.min(anchor.right - width, vw - width - MARGIN));
+  const below = vh - anchor.bottom - GAP - MARGIN;
+  const above = anchor.top - GAP - MARGIN;
+  const downward = props.down ? height <= below || below >= above : !(height <= above || above >= below);
+  const top = downward ? anchor.bottom + GAP : Math.max(MARGIN, anchor.top - GAP - height);
+  const room = downward ? below : above;
+  style.value = { left: `${left}px`, top: `${top}px`, maxHeight: `${Math.max(120, room)}px` };
+}
+
+watch(open, async (value) => {
   if (value) {
+    claimPopup(close);
+    style.value = { visibility: "hidden" };
     document.addEventListener("click", onDocument);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    await nextTick();
+    place();
   } else {
+    releasePopup(close);
     document.removeEventListener("click", onDocument);
     document.removeEventListener("keydown", onKey);
+    window.removeEventListener("resize", place);
+    window.removeEventListener("scroll", place, true);
   }
 });
 
@@ -43,9 +83,11 @@ onBeforeUnmount(() => (open.value = false));
     >
       <AppIcon name="dots" :size="18" />
     </button>
-    <div v-if="open" class="menu card" :class="{ down }" role="menu" @click="open = false">
-      <slot />
-    </div>
+    <Teleport to="body">
+      <div v-if="open" ref="menu" class="menu card" role="menu" :style="style" @click="open = false">
+        <slot />
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -59,21 +101,16 @@ onBeforeUnmount(() => (open.value = false));
 }
 
 .menu {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 6px);
-  z-index: 5;
+  position: fixed;
+  z-index: 1000;
   min-width: 200px;
+  max-width: calc(100vw - 16px);
+  overflow-y: auto;
   padding: 6px;
   display: flex;
   flex-direction: column;
   gap: 2px;
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.16);
-}
-
-.menu.down {
-  bottom: auto;
-  top: calc(100% + 6px);
 }
 
 .menu :deep(button),

@@ -8,7 +8,7 @@
 import asyncio
 import contextlib
 import logging
-from collections.abc import Coroutine, Iterable
+from collections.abc import Callable, Coroutine, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
@@ -107,6 +107,8 @@ class Controller:
         self._pump_watch: dict[str, PumpWatch] = {}
         # Реле, которые сейчас включают нарочно (проверка из мастера): до какого времени.
         self._settle_until: dict[str, datetime] = {}
+        # Журнал проблем: пишет, когда проблема открылась и закрылась.
+        self.problem_journal: Callable[[HealthReport], Coroutine[Any, Any, None]] | None = None
         self._allowed_on: dict[str, datetime] = {}
         # Машины, у которых насос включался без команды: когда и что.
         self._unexpected: dict[str, tuple[datetime, str]] = {}
@@ -411,6 +413,8 @@ class Controller:
         # и ждать ответа телефона там незачем.
         if report.opened or report.closed:
             self._spawn(self._notify_problems_safely(report))
+            if self.problem_journal is not None:
+                self._spawn(self.problem_journal(report))
         return report
 
     async def recheck(self) -> None:

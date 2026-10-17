@@ -13,7 +13,7 @@ import asyncio
 import contextlib
 import logging
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -211,6 +211,13 @@ class WateringQueue:
 
     def history(self) -> list[WateringRequest]:
         return list(self._history)
+
+    def forget(self, ids: Collection[str]) -> int:
+        """Убрать законченные заявки из журнала. Сколько убрано."""
+        wanted = set(ids)
+        before = len(self._history)
+        self._history = [r for r in self._history if r.id not in wanted]
+        return before - len(self._history)
 
     def all(self) -> list[WateringRequest]:
         return self.running() + self.queued() + self.history()

@@ -24,6 +24,7 @@ from plant_control_addon.api.catalog_routes import router as catalog_router
 from plant_control_addon.api.errors import install_error_handlers
 from plant_control_addon.api.ha_routes import HaGateway
 from plant_control_addon.api.ha_routes import router as ha_router
+from plant_control_addon.api.journal_routes import router as journal_router
 from plant_control_addon.api.machines import router as machines_router
 from plant_control_addon.api.mqtt_routes import router as mqtt_router
 from plant_control_addon.api.notification_routes import router as notifications_router
@@ -36,6 +37,7 @@ from plant_control_addon.controller import Controller, SystemClock
 from plant_control_addon.ha.client import HomeAssistantClient
 from plant_control_addon.ha.supervisor import panel_path
 from plant_control_addon.health_source import HaHealthSource
+from plant_control_addon.journals import Journals
 from plant_control_addon.mqtt.bridge import MqttBridge
 from plant_control_addon.mqtt.settings import MqttManager
 from plant_control_addon.mqtt.transport import BrokerConfig, resolve_broker, session_factory
@@ -130,6 +132,10 @@ def create_app(
         )
         await calibration.load()
         controller.calibration = calibration
+        journals = Journals(store, registry, controller.queue, clock.now)
+        await journals.load()
+        controller.problem_journal = journals.record
+        app.state.journals = journals
         app.state.calibration = calibration
         scheduler = SchedulerService(
             registry,
@@ -161,6 +167,7 @@ def create_app(
             asyncio.create_task(controller.health_loop(health_interval)),
             asyncio.create_task(controller.queue.run()),
             asyncio.create_task(scheduler.run(schedule_interval)),
+            asyncio.create_task(journals.prune_loop()),
         ]
 
         # Мост в HA через MQTT: брокер и включение настраиваются в интерфейсе.
@@ -192,6 +199,7 @@ def create_app(
     app.include_router(calibration_router)
     app.include_router(catalog_router)
     app.include_router(ha_router)
+    app.include_router(journal_router)
     app.include_router(machines_router)
     app.include_router(mqtt_router)
     app.include_router(notifications_router)

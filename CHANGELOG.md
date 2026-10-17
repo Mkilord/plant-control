@@ -32,6 +32,13 @@ Target: 0.2.0. Available in the dev channel.
 - Power groups: limit on how long a request waits for a slot.
 - The pump run limit defaults to 300 s and can be turned off.
 - Dev channel: every push to `dev` becomes a new version for Home Assistant.
+- Journals can be cleared: the watering journal (all records or only failed
+  ones), past calibrations of a machine and the new problem history. Delete one
+  record, records older than 7, 30 or 90 days, or everything. The calibration in
+  effect and open problems are never deleted.
+- Problem history on the Problems tab: when each problem opened, how long it
+  lasted and on which machine.
+- Retention setting for journals: 30, 90 or 365 days or no limit.
 
 ### Changed
 
@@ -44,6 +51,11 @@ Target: 0.2.0. Available in the dev channel.
 
 ### Fixed
 
+- The list of Home Assistant entities did not open in the Home Assistant app on
+  Android. The relay field now has its own list with search, entity states and
+  relays taken by other machines.
+- Hints behind the "i" icon and "..." menus no longer go off screen. On a phone a
+  hint opens as a panel at the bottom.
 - A pump relay that turns on while its machine is not watering is switched off
   right away. Before, it was taken for a manual start and could run until the
   pump limit or longer. If the relay does not confirm the off command, watering

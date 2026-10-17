@@ -5,6 +5,7 @@ import { api, errorText, type CalibrationRecord, type Machine, type RouteFlowSta
 import { ml, seconds, time } from "../format";
 import { t } from "../i18n";
 import AppIcon from "./AppIcon.vue";
+import ClearJournalMenu from "./ClearJournalMenu.vue";
 
 const props = defineProps<{ machine: Machine }>();
 
@@ -12,13 +13,17 @@ const records = ref<CalibrationRecord[]>([]);
 const error = ref("");
 const shown = ref(10);
 
-onMounted(async () => {
+const cleared = ref("");
+
+async function load() {
   try {
     records.value = await api.calibrationHistory(props.machine.id);
   } catch (e) {
     error.value = errorText(e);
   }
-});
+}
+
+onMounted(load);
 
 function plantName(routeId: string): string {
   const route = props.machine.config.routes.find((r) => r.id === routeId);
@@ -34,6 +39,34 @@ const activeIds = computed(
         .filter((id): id is number => typeof id === "number"),
     ),
 );
+
+// --- Очистка: действующие записи не удаляются ---
+
+function clearable(days: number | null): CalibrationRecord[] {
+  const cutoff = days === null ? Infinity : Date.now() - days * 86_400_000;
+  return records.value.filter(
+    (r) => !activeIds.value.has(r.id) && new Date(r.created_at).getTime() < cutoff,
+  );
+}
+
+async function clearHistory(days: number | null): Promise<number> {
+  const { deleted } = await api.clearCalibrations(props.machine.id, { older_than_days: days });
+  return deleted;
+}
+
+async function afterClear(deleted: number) {
+  cleared.value = t("journal.deleted", { count: deleted });
+  await load();
+}
+
+async function removeRecord(record: CalibrationRecord) {
+  try {
+    await api.clearCalibrations(props.machine.id, { ids: [record.id] });
+    records.value = records.value.filter((r) => r.id !== record.id);
+  } catch (e) {
+    error.value = errorText(e);
+  }
+}
 
 function flowLine(flow: RouteFlowStatus): string {
   if (flow.source === "advanced") return t("calib.hist.advanced");
@@ -101,7 +134,18 @@ function secondLevel(record: CalibrationRecord): boolean {
   </section>
 
   <section class="card step">
-    <h2>{{ t("calib.hist.title") }}</h2>
+    <div class="head">
+      <h2>{{ t("calib.hist.title") }}</h2>
+      <ClearJournalMenu
+        v-if="records.length"
+        :what="t('journal.what_calibrations')"
+        :note="t('journal.active_kept')"
+        :count="(days) => clearable(days).length"
+        :clear="clearHistory"
+        @done="afterClear"
+      />
+    </div>
+    <p v-if="cleared" class="muted small">{{ cleared }}</p>
     <div v-if="error" class="error">{{ error }}</div>
     <p v-else-if="!records.length" class="muted small">{{ t("calib.hist.empty") }}</p>
     <ul class="records">
@@ -112,6 +156,16 @@ function secondLevel(record: CalibrationRecord): boolean {
           <span class="muted small">{{ methodText(record) }}</span>
           <span v-if="secondLevel(record)" class="chip">{{ t("calib.hist.second_level") }}</span>
           <span v-if="activeIds.has(record.id)" class="chip on">{{ t("calib.hist.active") }}</span>
+          <button
+            v-else
+            type="button"
+            class="icon-button remove"
+            :title="t('journal.remove_one')"
+            :aria-label="t('journal.remove_one')"
+            @click="removeRecord(record)"
+          >
+            <AppIcon name="trash" :size="15" />
+          </button>
         </div>
         <span v-if="result(record)" class="small">
           {{
@@ -134,6 +188,25 @@ function secondLevel(record: CalibrationRecord): boolean {
 </template>
 
 <style scoped>
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.remove {
+  margin-left: auto;
+  padding: 2px 6px;
+  opacity: 0.6;
+}
+
+.remove:hover,
+.remove:focus-visible {
+  color: var(--danger);
+  opacity: 1;
+}
+
 .flows,
 .records {
   list-style: none;

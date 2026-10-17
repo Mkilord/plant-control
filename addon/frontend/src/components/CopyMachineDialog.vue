@@ -5,6 +5,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { api, errorText, type HaEntity, type Machine } from "../api";
 import { t } from "../i18n";
 import AppIcon from "./AppIcon.vue";
+import EntitySelect from "./EntitySelect.vue";
 import FormField from "./FormField.vue";
 import ModalDialog from "./ModalDialog.vue";
 import NumField from "./NumField.vue";
@@ -22,6 +23,8 @@ interface Draft {
 const count = ref(1);
 const drafts = ref<Draft[]>([]);
 const entities = ref<HaEntity[]>([]);
+// Реле существующих машин: entity_id -> имя машины.
+const existing = ref<Map<string, string>>(new Map());
 const busy = ref(false);
 const error = ref("");
 
@@ -51,7 +54,32 @@ onMounted(() => {
     .haEntities()
     .then((list) => (entities.value = list))
     .catch(() => undefined);
+  api
+    .listMachines()
+    .then((machines) => {
+      const taken = new Map<string, string>();
+      for (const machine of machines) {
+        taken.set(machine.config.pump.entity_id, machine.config.name);
+        for (const route of machine.config.routes) {
+          if (route.valve_entity_id) taken.set(route.valve_entity_id, machine.config.name);
+        }
+      }
+      existing.value = taken;
+    })
+    .catch(() => undefined);
 });
+
+// Занятые реле для поля копии: чужие машины и реле, уже выбранные в других копиях.
+function takenFor(index: number): Map<string, string> {
+  const taken = new Map(existing.value);
+  drafts.value.forEach((item, other) => {
+    if (other === index) return;
+    for (const entity of [item.pump, ...Object.values(item.valves)]) {
+      if (entity) taken.set(entity, item.name);
+    }
+  });
+  return taken;
+}
 
 async function copy() {
   error.value = "";
@@ -76,9 +104,6 @@ async function copy() {
 <template>
   <ModalDialog :title="t('copy.title', { name: machine.config.name })" @close="emit('close')">
     <form class="stack" @submit.prevent="copy">
-      <datalist id="copy-entities">
-        <option v-for="e in entities" :key="e.entity_id" :value="e.entity_id">{{ e.name }}</option>
-      </datalist>
       <p class="note">
         <AppIcon name="info" />
         <span>{{ t("copy.hint") }}</span>
@@ -94,10 +119,24 @@ async function copy() {
           <input :id="id" v-model="item.name" required maxlength="100" />
         </FormField>
         <FormField v-slot="{ id }" :label="t('pump.entity')">
-          <input :id="id" v-model="item.pump" list="copy-entities" required placeholder="switch.pump_2" />
+          <EntitySelect
+            :id="id"
+            v-model="item.pump"
+            :entities="entities"
+            :taken="takenFor(index)"
+            required
+            placeholder="switch.pump_2"
+          />
         </FormField>
         <FormField v-for="route in valveRoutes" :key="route.id" v-slot="{ id }" :label="t('copy.valve', { plant: route.name || route.id })">
-          <input :id="id" v-model="item.valves[route.id]" list="copy-entities" required placeholder="switch.valve_1" />
+          <EntitySelect
+            :id="id"
+            v-model="item.valves[route.id]"
+            :entities="entities"
+            :taken="takenFor(index)"
+            required
+            placeholder="switch.valve_1"
+          />
         </FormField>
       </fieldset>
 

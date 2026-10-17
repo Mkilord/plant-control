@@ -468,6 +468,22 @@ export interface HaEntity {
   state: string;
 }
 
+export interface ProblemLogRecord {
+  id: number;
+  machine_id: string;
+  machine_name: string;
+  kind: string;
+  target: string;
+  details: string;
+  blocking: boolean;
+  opened_at: string;
+  closed_at: string | null;
+}
+
+export interface JournalSettings {
+  keep_days: number | null;
+}
+
 export interface Health {
   status: string;
   home_assistant: string;
@@ -622,6 +638,18 @@ export const api = {
 
   // Проблемы.
   problems: () => request<Problem[]>("GET", "api/problems"),
+
+  // Журналы: очистка и срок хранения.
+  clearWaterings: (body: { scope?: "all" | "problems"; older_than_days?: number | null; ids?: string[] }) =>
+    request<{ deleted: number }>("POST", "api/journals/waterings/clear", body),
+  clearCalibrations: (machineId: string, body: { older_than_days?: number | null; ids?: number[] }) =>
+    request<{ deleted: number }>("POST", "api/journals/calibrations/clear", { machine_id: machineId, ...body }),
+  problemLog: () => request<ProblemLogRecord[]>("GET", "api/journals/problems"),
+  clearProblemLog: (body: { older_than_days?: number | null; ids?: number[] }) =>
+    request<{ deleted: number }>("POST", "api/journals/problems/clear", body),
+  journalSettings: () => request<JournalSettings>("GET", "api/journals/settings"),
+  saveJournalSettings: (settings: JournalSettings) =>
+    request<JournalSettings>("PUT", "api/journals/settings", settings),
   checkProblems: () => request<Problem[]>("POST", "api/problems/check"),
   ackProblem: (id: string) => request<Problem>("POST", `api/problems/${encodeURIComponent(id)}/ack`),
   muteProblem: (id: string, hours: number) =>

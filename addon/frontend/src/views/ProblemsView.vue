@@ -1,12 +1,16 @@
 <script setup lang="ts">
 // Проблемы: их находит проверка состояния, руками можно подтвердить и приглушить.
-import { onMounted, onUnmounted, ref } from "vue";
-import { api, errorText, type Machine, type Problem } from "../api";
+import { computed, onMounted, onUnmounted, ref } from "vue";
+import { api, errorText, type Machine, type Problem, type ProblemLogRecord } from "../api";
 import AppIcon from "../components/AppIcon.vue";
-import { time } from "../format";
+import ClearJournalMenu from "../components/ClearJournalMenu.vue";
+import { byDay, clock, span, time } from "../format";
 import { hasMessage, t } from "../i18n";
 
 const problems = ref<Problem[]>([]);
+const log = ref<ProblemLogRecord[]>([]);
+const shown = ref(30);
+const cleared = ref("");
 const machines = ref<Machine[]>([]);
 const error = ref("");
 const loaded = ref(false);
@@ -14,8 +18,13 @@ let timer: number | undefined;
 
 async function refresh() {
   try {
-    const [list, all] = await Promise.all([api.problems(), api.listMachines()]);
+    const [list, all, history] = await Promise.all([
+      api.problems(),
+      api.listMachines(),
+      api.problemLog(),
+    ]);
     problems.value = list;
+    log.value = history;
     machines.value = all;
     error.value = "";
   } catch (e) {
@@ -25,7 +34,41 @@ async function refresh() {
   }
 }
 
-function title(problem: Problem): string {
+// --- История ---
+
+const logDays = computed(() => byDay(log.value.slice(0, shown.value), (r) => r.opened_at));
+
+function lasted(record: ProblemLogRecord): string {
+  if (!record.closed_at) return t("problems.log_ongoing");
+  const seconds = (new Date(record.closed_at).getTime() - new Date(record.opened_at).getTime()) / 1000;
+  return t("problems.log_lasted", { time: span(Math.max(1, seconds)) });
+}
+
+function clearable(days: number | null): ProblemLogRecord[] {
+  const cutoff = days === null ? Infinity : Date.now() - days * 86_400_000;
+  return log.value.filter((r) => r.closed_at && new Date(r.closed_at).getTime() < cutoff);
+}
+
+async function clearLog(days: number | null): Promise<number> {
+  const { deleted } = await api.clearProblemLog({ older_than_days: days });
+  return deleted;
+}
+
+async function afterClear(deleted: number) {
+  cleared.value = t("journal.deleted", { count: deleted });
+  await refresh();
+}
+
+async function removeRecord(record: ProblemLogRecord) {
+  try {
+    await api.clearProblemLog({ ids: [record.id] });
+    log.value = log.value.filter((r) => r.id !== record.id);
+  } catch (e) {
+    error.value = errorText(e);
+  }
+}
+
+function title(problem: Problem | ProblemLogRecord): string {
   const key = `problem.${problem.kind}`;
   return hasMessage(key) ? t(key) : problem.kind;
 }
@@ -138,11 +181,151 @@ onUnmounted(() => window.clearInterval(timer));
           </button>
         </footer>
       </article>
+
+      <!-- История: когда проблемы открывались и закрывались -->
+      <section class="card">
+        <div class="log-head">
+          <h2 class="log-title"><AppIcon name="history" :size="18" />{{ t("problems.log") }}</h2>
+          <ClearJournalMenu
+            v-if="log.length"
+            :what="t('journal.what_problems')"
+            :note="t('journal.open_kept')"
+            :count="(days) => clearable(days).length"
+            :clear="clearLog"
+            @done="afterClear"
+          />
+        </div>
+        <p v-if="cleared" class="muted small">{{ cleared }}</p>
+        <p v-if="loaded && !log.length" class="muted small">{{ t("problems.log_empty") }}</p>
+        <div v-for="day in logDays" :key="day.label" class="day">
+          <div class="day-label muted small">{{ day.label }}</div>
+          <ul class="log">
+            <li v-for="record in day.items" :key="record.id" class="log-item">
+              <span class="log-time small">{{ clock(record.opened_at) }}</span>
+              <span class="dot" :class="{ open: !record.closed_at, blocking: record.blocking }" />
+              <div class="log-main">
+                <div>
+                  <strong>{{ title(record) }}</strong>
+                  <span class="muted"> · {{ record.machine_name }}</span>
+                </div>
+                <div class="muted small">
+                  {{ lasted(record) }}
+                  <template v-if="record.blocking"> · {{ t("problems.blocking") }}</template>
+                </div>
+                <div v-if="record.details" class="small log-details">{{ record.details }}</div>
+              </div>
+              <button
+                v-if="record.closed_at"
+                type="button"
+                class="icon-button remove"
+                :title="t('journal.remove_one')"
+                :aria-label="t('journal.remove_one')"
+                @click="removeRecord(record)"
+              >
+                <AppIcon name="trash" :size="15" />
+              </button>
+            </li>
+          </ul>
+        </div>
+        <button v-if="log.length > shown" class="ghost" @click="shown += 30">
+          {{ t("waterings.more", { count: log.length - shown }) }}
+        </button>
+      </section>
     </div>
   </div>
 </template>
 
 <style scoped>
+.log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.log-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  margin: 0;
+}
+
+.day {
+  margin-top: 10px;
+}
+
+.day-label {
+  text-transform: capitalize;
+}
+
+.log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.log-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  font-size: 14px;
+}
+
+.log-item:first-child {
+  border-top: none;
+}
+
+.log-time {
+  min-width: 38px;
+  font-variant-numeric: tabular-nums;
+  padding-top: 1px;
+}
+
+.dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--reserve);
+}
+
+.dot.blocking {
+  background: color-mix(in srgb, var(--danger) 55%, var(--reserve));
+}
+
+.dot.open {
+  background: var(--warn);
+}
+
+.dot.open.blocking {
+  background: var(--danger);
+}
+
+.log-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.log-details {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.remove {
+  padding: 4px 6px;
+  opacity: 0.6;
+}
+
+.remove:hover,
+.remove:focus-visible {
+  color: var(--danger);
+  opacity: 1;
+}
+
 .head {
   display: flex;
   align-items: center;
