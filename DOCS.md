@@ -253,6 +253,12 @@ tag. For now these entities and push texts are named in Russian; you can rename
 entities in Home Assistant and change the push texts in the advanced
 notification settings.
 
+Renaming a machine or a plant updates the device and entity names in Home
+Assistant, and deleting a machine or a plant removes its entities. Home
+Assistant keeps entity ids (`sensor....`) on rename; change them in its settings
+if needed. If two PlantControl add-ons share a broker (for example stable and
+dev), each removes only its own entities.
+
 Events on the bus (`plant_control_watering_done`, `plant_control_watering_failed`,
 `plant_control_problem_opened` and others) let automations react on their own.
 

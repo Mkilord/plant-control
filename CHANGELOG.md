@@ -51,6 +51,9 @@ Target: 0.2.0. Available in the dev channel.
 
 ### Fixed
 
+- MQTT: entities of a deleted machine or plant stay in Home Assistant no
+  longer, leftovers from earlier versions are removed on connect. Renaming a
+  machine or a plant updates the device and entity names in Home Assistant.
 - The list of Home Assistant entities did not open in the Home Assistant app on
   Android. The relay field now has its own list with search, entity states and
   relays taken by other machines.

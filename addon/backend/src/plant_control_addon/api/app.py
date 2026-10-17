@@ -39,6 +39,7 @@ from plant_control_addon.ha.supervisor import panel_path
 from plant_control_addon.health_source import HaHealthSource
 from plant_control_addon.journals import Journals
 from plant_control_addon.mqtt.bridge import MqttBridge
+from plant_control_addon.mqtt.known import KnownMachines
 from plant_control_addon.mqtt.settings import MqttManager
 from plant_control_addon.mqtt.transport import BrokerConfig, resolve_broker, session_factory
 from plant_control_addon.notification_settings import NotificationSettingsManager
@@ -171,9 +172,16 @@ def create_app(
         ]
 
         # Мост в HA через MQTT: брокер и включение настраиваются в интерфейсе.
+        known_machines = KnownMachines(store)
+
         def make_bridge(broker: BrokerConfig, prefix: str) -> MqttBridge:
             return MqttBridge(
-                session_factory(broker), registry, controller, board, discovery_prefix=prefix
+                session_factory(broker),
+                registry,
+                controller,
+                board,
+                discovery_prefix=prefix,
+                known=known_machines,
             )
 
         mqtt_manager = MqttManager(

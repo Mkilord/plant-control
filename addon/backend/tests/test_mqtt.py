@@ -14,6 +14,7 @@ from plant_control_addon.catalog import PumpModel, TankType
 from plant_control_addon.config import MachineConfig
 from plant_control_addon.controller import Controller, SystemClock
 from plant_control_addon.mqtt.bridge import MqttBridge
+from plant_control_addon.mqtt.known import KnownMachines
 from plant_control_addon.mqtt.settings import MqttManager, MqttSettingsIn
 from plant_control_addon.mqtt.topics import AVAILABILITY, discovery, state_topic
 from plant_control_addon.mqtt.transport import BrokerConfig
@@ -152,6 +153,87 @@ async def test_publish_all_sends_discovery_once_and_state_every_time(
     assert all(retain for _, _, retain in session.published)
 
 
+async def test_renamed_machine_is_announced_again(
+    bridge: MqttBridge, registry: MachineRegistry
+) -> None:
+    session = FakeSession()
+    entry = entry_of(registry)
+    await bridge.publish_all(session)
+    topic, _ = discovery(entry, "homeassistant")[0]
+
+    config = entry.config.model_copy(deep=True)
+    config.name = "Новое имя"
+    await registry.update(entry.id, config)
+    session.published.clear()
+    await bridge.publish_all(session)
+
+    device = session.last(topic)["device"]
+    assert isinstance(device, dict) and device["name"] == "Новое имя"
+    # Все описания с новым именем, без лишних повторов.
+    assert len(session.topics()) == len(discovery(entry_of(registry), "homeassistant")) + 1
+
+
+async def test_deleted_machine_entities_are_removed(
+    bridge: MqttBridge, registry: MachineRegistry
+) -> None:
+    session = FakeSession()
+    entry = entry_of(registry)
+    topics = [topic for topic, _ in discovery(entry, "homeassistant")]
+    await bridge.publish_all(session)
+
+    await registry.delete(entry.id)
+    session.published.clear()
+    await bridge.publish_all(session)
+
+    cleared = {topic for topic, payload, retain in session.published if payload == "" and retain}
+    assert cleared == {*topics, state_topic(entry.id)}
+
+
+async def test_leftovers_at_the_broker_are_removed(
+    bridge: MqttBridge, registry: MachineRegistry
+) -> None:
+    """Описания с прошлых запусков: удалённая машина и удалённое растение."""
+    session = FakeSession()
+    entry = entry_of(registry)
+    await bridge._known.add(["m-old"])
+    await bridge.publish_all(session)
+    own, own_body = discovery(entry, "homeassistant")[0]
+    body = json.dumps(own_body)
+    stale = "homeassistant/button/plant_control_m-old/water_main/config"
+    old_plant = f"homeassistant/button/plant_control_{entry.id}/water_gone/config"
+    foreign = "homeassistant/sensor/0x00158d/temperature/config"
+    session.published.clear()
+
+    for topic in (stale, old_plant, foreign, own):
+        await bridge.handle_discovery(session, topic, body)
+    # Пустое сообщение - это уже удалённая сущность.
+    await bridge.handle_discovery(session, stale, "")
+    # Машина другого экземпляра PlantControl на том же брокере: не наша, не трогаем.
+    await bridge.handle_discovery(
+        session, "homeassistant/button/plant_control_m-other/water_main/config", body
+    )
+
+    assert session.published == [
+        (stale, "", True),
+        (state_topic("m-old"), "", True),
+        (old_plant, "", True),
+    ]
+
+
+async def test_known_machines_start_from_journals(tmp_path: Path) -> None:
+    store = MachineStore(tmp_path / "known.db")
+    await store.open()
+    await store.save_calibration("m-gone", "main", "marks", "{}")
+    known = KnownMachines(store)
+
+    await known.load(["m-live"])
+
+    assert "m-gone" in known and "m-live" in known and "m-other" not in known
+    again = KnownMachines(store)
+    await again.load([])
+    assert "m-gone" in again
+
+
 async def test_state_payload_shows_water_and_problems(
     bridge: MqttBridge, registry: MachineRegistry, board: ProblemBoard
 ) -> None:
@@ -229,7 +311,7 @@ async def test_connect_announces_online_and_subscribes(bridge: MqttBridge) -> No
     await bridge._on_connect(session)
 
     assert (AVAILABILITY, "online", True) in session.published
-    assert session.subscriptions == ["plant_control/+/cmd/#"]
+    assert session.subscriptions == ["plant_control/+/cmd/#", "homeassistant/+/+/+/config"]
 
 
 async def test_resolve_broker_falls_back_to_settings() -> None:

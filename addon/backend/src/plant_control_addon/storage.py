@@ -222,6 +222,10 @@ class MachineStore:
     async def delete_problem_log(self, ids: Collection[int]) -> int:
         return await asyncio.to_thread(self._delete_problem_log, list(ids))
 
+    async def journal_machine_ids(self) -> set[str]:
+        """Машины, упомянутые в журналах, в том числе уже удалённые."""
+        return await asyncio.to_thread(self._journal_machine_ids)
+
     async def load_catalog(self) -> list[StoredCatalogItem]:
         return await asyncio.to_thread(self._load_catalog)
 
@@ -446,6 +450,18 @@ class MachineStore:
                 )
                 deleted += cursor.rowcount
             return deleted
+
+    def _journal_machine_ids(self) -> set[str]:
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT machine_id FROM waterings
+                UNION SELECT machine_id FROM calibrations
+                UNION SELECT machine_id FROM problem_log
+                UNION SELECT id FROM machines
+                """
+            ).fetchall()
+        return {row[0] for row in rows}
 
     def _load_catalog(self) -> list[StoredCatalogItem]:
         with self._connect() as db:

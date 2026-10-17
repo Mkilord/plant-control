@@ -97,7 +97,11 @@ class AiomqttSession:
     async def messages(self) -> AsyncIterator[tuple[str, str]]:
         async for message in self._client.messages:
             payload = message.payload
-            text = payload.decode() if isinstance(payload, bytes | bytearray) else str(payload)
+            text = (
+                payload.decode(errors="replace")
+                if isinstance(payload, bytes | bytearray)
+                else str(payload)
+            )
             yield str(message.topic), text
 
 
