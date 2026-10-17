@@ -1,9 +1,9 @@
 # Описание add-on'а для Home Assistant.
 # Supervisor читает этот файл: имя, права, порты, настройки.
-name: PlantControl
+name: "PlantControl (dev)"
 # Версия определяет и тег готового образа. В dev здесь следующий релиз с суффиксом
 # -dev (сборки получат -dev.N), в beta - -beta.N, в main - без суффикса.
-version: "0.2.0-dev"
+version: "0.2.0-dev.38"
 slug: plant_control
 description: "Targeted plant watering: your own watering machines, schedules, queue and problems"
 url: https://github.com/Mkilord/plant-control

@@ -1,5 +1,5 @@
 # Описание репозитория для магазина add-on'ов Home Assistant.
 # Supervisor ищет этот файл в корне, а add-on находит по config.yaml.
-name: PlantControl
+name: "PlantControl (dev)"
 url: https://github.com/Mkilord/plant-control
 maintainer: Mkilord
